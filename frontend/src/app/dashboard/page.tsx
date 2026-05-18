@@ -459,81 +459,6 @@ function Heatmap() {
   return <NoData message="Hourly message data is not available yet." />;
 }
 
-// ── Agent table ───────────────────────────────────────────────────────────────
-function AgentTable({ agents }: { agents: AgentStat[] }) {
-  if (!agents.length) return <NoData message="No agent data for this period." />;
-  const initials = (name: string) => name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
-  return (
-    <div className="overflow-x-auto">
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead>
-          <tr>
-            {["Agent", "Handled", "Resolved", "Resolution", "Avg response"].map((h) => (
-              <th key={h} style={{ textAlign: "left", padding: "6px 8px 10px", fontSize: 11, fontWeight: 700, color: C.secondary, textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: `1px solid ${C.outlineVariant}` }}>
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {agents.map((a, i) => (
-            <tr key={a.id} style={{ borderBottom: i === agents.length - 1 ? "none" : `1px solid ${C.outlineVariant}` }}>
-              <td style={{ padding: "10px 8px" }}>
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center justify-center shrink-0 text-[11px] font-bold"
-                    style={{ width: 28, height: 28, borderRadius: "50%", background: "#ede9fe", color: C.accent }}>
-                    {initials(a.full_name)}
-                  </div>
-                  <span style={{ fontWeight: 500, color: C.onSurface }}>{a.full_name}</span>
-                </div>
-              </td>
-              <td style={{ padding: "10px 8px", color: C.onSurface, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{a.conversations_handled.toLocaleString()}</td>
-              <td style={{ padding: "10px 8px", color: C.onSurface, fontVariantNumeric: "tabular-nums" }}>{a.resolved.toLocaleString()}</td>
-              <td style={{ padding: "10px 8px" }}>
-                <div className="flex items-center gap-2">
-                  <div style={{ height: 4, width: 56, background: "#f1f5f9", borderRadius: 100, overflow: "hidden" }}>
-                    <div style={{ width: `${Math.min(a.resolution_rate, 100)}%`, height: "100%", background: "#10B981", borderRadius: 100 }} />
-                  </div>
-                  <span style={{ fontSize: 12, color: C.onSurface, fontVariantNumeric: "tabular-nums" }}>{Math.round(a.resolution_rate)}%</span>
-                </div>
-              </td>
-              <td style={{ padding: "10px 8px", color: C.secondary, fontVariantNumeric: "tabular-nums" }}>
-                {a.avg_first_response_min != null ? `${Math.round(a.avg_first_response_min)} min` : "—"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Queue by channel ──────────────────────────────────────────────────────────
-function QueueByChannel({ queue }: { queue: Record<string, number> }) {
-  const entries = useMemo(() => Object.entries(queue)
-    .map(([id, value]) => { const ch = CHANNEL_MAP[id.toUpperCase()]; return { id, label: ch?.label ?? id, color: ch?.color ?? "#64748B", value }; })
-    .filter((e) => e.value > 0)
-    .sort((a, b) => b.value - a.value), [queue]);
-
-  if (!entries.length) return <NoData message="No queued conversations." />;
-  const max = Math.max(...entries.map((e) => e.value), 1);
-  return (
-    <div className="flex flex-col gap-[10px]">
-      {entries.map((e) => (
-        <div key={e.id}>
-          <div className="flex justify-between mb-1">
-            <span style={{ fontSize: 12, color: C.onSurface, fontWeight: 500 }}>{e.label}</span>
-            <span style={{ fontSize: 12, color: C.secondary, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{e.value.toLocaleString()}</span>
-          </div>
-          <div style={{ height: 8, background: "#f1f5f9", borderRadius: 100, overflow: "hidden" }}>
-            <div style={{ width: `${(e.value / max) * 100}%`, height: "100%", background: e.color, borderRadius: 100 }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // ── Recent activity ───────────────────────────────────────────────────────────
 // No real-time feed API exists yet — shows empty state.
 function RecentActivity() {
@@ -712,17 +637,7 @@ export default function DashboardPage() {
             </Card>
           </div>
 
-          {/* Row 3: Agent table + Queue */}
-          <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: "2fr 1fr" }}>
-            <Card title="Agent performance" action={<span style={{ fontSize: 11, color: "#94a3b8" }}>This period</span>}>
-              <AgentTable agents={stats?.agent_stats ?? []} />
-            </Card>
-            <Card title="Queue by channel" action={<span style={{ fontSize: 11, color: "#94a3b8" }}>Open · waiting for reply</span>}>
-              <QueueByChannel queue={stats?.queue_by_channel ?? {}} />
-            </Card>
-          </div>
-
-          {/* Row 4: Recent activity + Top tags + AI insights */}
+          {/* Row 3: Recent activity + Top tags + AI insights */}
           <div className="grid gap-4" style={{ gridTemplateColumns: "5fr 4fr 3fr" }}>
             <Card title="Recent activity"
               action={<span style={{ fontSize: 12, color: C.primary, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 2 }}>
