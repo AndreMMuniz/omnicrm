@@ -703,31 +703,57 @@ function SegmentedControl<T extends string>({ options, value, onChange }: {
   );
 }
 
+// ── Cache helpers ─────────────────────────────────────────────────────────────
+const cacheKey = (days: number) => `omnichat_dashboard_${days}`;
+
+function readCache(days: number): DashboardStats | null {
+  try {
+    const raw = localStorage.getItem(cacheKey(days));
+    return raw ? (JSON.parse(raw) as DashboardStats) : null;
+  } catch { return null; }
+}
+
+function writeCache(days: number, data: DashboardStats) {
+  try { localStorage.setItem(cacheKey(days), JSON.stringify(data)); } catch {}
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const [stats, setStats]                 = useState<DashboardStats | null>(null);
-  const [loading, setLoading]             = useState(true);
   const [apiError, setApiError]           = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated]     = useState<Date | null>(null);
   const [range, setRange]                 = useState("7d");
   const [channelFilter, setChannelFilter] = useState<string[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [volumeView, setVolumeView]       = useState<VolumeView>("day");
 
   useEffect(() => {
-    let active = true;
     const days = RANGES.find((r) => r.id === range)?.days ?? 7;
-    setLoading(true);
-    setApiError(null);
-    void dashboardApi.getDashboardStats(days).then((data) => {
-      if (active) { setStats(data); setLoading(false); }
-    }).catch((err: unknown) => {
-      if (!active) return;
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("[Dashboard] /admin/stats failed:", msg);
-      setApiError(msg);
-      setLoading(false);
-    });
-    return () => { active = false; };
+
+    // Load cached data immediately — no spinner
+    const cached = readCache(days);
+    if (cached) { setStats(cached); setApiError(null); }
+
+    let active = true;
+
+    const fetchData = () => {
+      void dashboardApi.getDashboardStats(days).then((data) => {
+        if (!active) return;
+        setStats(data);
+        setLastUpdated(new Date());
+        setApiError(null);
+        writeCache(days, data);
+      }).catch((err: unknown) => {
+        if (!active) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[Dashboard] /admin/stats failed:", msg);
+        setApiError(msg);
+      });
+    };
+
+    fetchData();
+    const timer = setInterval(fetchData, 30_000);
+    return () => { active = false; clearInterval(timer); };
   }, [range]);
 
   const pctTrend = (cur: number, prev: number): { dir: "up" | "down" | "flat"; value: string } | null => {
@@ -754,7 +780,10 @@ export default function DashboardPage() {
                 Live
               </span>
               <span>·</span>
-              <span>Updated just now</span>
+              <span>{lastUpdated
+                ? `Updated at ${lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                : "Updating…"
+              }</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -771,12 +800,6 @@ export default function DashboardPage() {
 
         {/* ── Body ── */}
         <main className="flex-1 overflow-y-auto p-6 bg-[#f8fafc] scrollbar-hide">
-          {loading && (
-            <div className="flex items-center justify-center h-32 text-sm text-slate-500">
-              <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-indigo-600">progress_activity</span>
-              Loading…
-            </div>
-          )}
           {apiError && (
             <div className="mb-4 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
               <Icon name="error" size={18} fill={1} color="#be123c" />
