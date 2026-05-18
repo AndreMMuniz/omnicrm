@@ -148,6 +148,62 @@ function ChannelFilter({ selected, onChange }: { selected: string[]; onChange: (
   );
 }
 
+// ── Agent filter ──────────────────────────────────────────────────────────────
+function agentInitials(name: string) {
+  return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
+}
+
+function AgentFilter({ agents, value, onChange }: {
+  agents: AgentStat[];
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const selected = agents.find((a) => a.id === value) ?? null;
+  const label = selected ? selected.full_name : "All agents";
+  const initials = selected ? agentInitials(selected.full_name) : "AA";
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button ref={anchor} onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-2 h-9 pl-[6px] pr-3 rounded-[10px] bg-white border border-[#E9ECEF] text-[#1d1a24] text-[13px] font-medium cursor-pointer">
+        <span className="flex items-center justify-center text-[10px] font-bold shrink-0"
+          style={{ width: 22, height: 22, borderRadius: "50%", background: "#ede9fe", color: C.accent }}>
+          {initials}
+        </span>
+        {label}
+        <Icon name="expand_more" size={16} color="#94a3b8" />
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} width={220}>
+        {/* All agents option */}
+        <button onClick={() => { onChange(null); setOpen(false); }}
+          className="flex items-center gap-[10px] w-full px-[10px] py-2 rounded-lg text-[13px] font-medium cursor-pointer border-none text-left"
+          style={{ background: value === null ? C.surfaceContainer : "transparent", color: value === null ? C.primary : C.onSurface }}>
+          <span className="flex items-center justify-center text-[10px] font-bold shrink-0"
+            style={{ width: 24, height: 24, borderRadius: "50%", background: "#ede9fe", color: C.accent }}>
+            AA
+          </span>
+          <span className="flex-1">All agents</span>
+          {value === null && <Icon name="check" size={16} color={C.primary} />}
+        </button>
+        {agents.map((a) => (
+          <button key={a.id} onClick={() => { onChange(a.id); setOpen(false); }}
+            className="flex items-center gap-[10px] w-full px-[10px] py-2 rounded-lg text-[13px] font-medium cursor-pointer border-none text-left"
+            style={{ background: value === a.id ? C.surfaceContainer : "transparent", color: value === a.id ? C.primary : C.onSurface }}>
+            <span className="flex items-center justify-center text-[10px] font-bold shrink-0"
+              style={{ width: 24, height: 24, borderRadius: "50%", background: "#ede9fe", color: C.accent }}>
+              {agentInitials(a.full_name)}
+            </span>
+            <span className="flex-1">{a.full_name}</span>
+            {value === a.id && <Icon name="check" size={16} color={C.primary} />}
+          </button>
+        ))}
+      </Popover>
+    </div>
+  );
+}
+
 // ── KPI card ─────────────────────────────────────────────────────────────────
 function KPICard({ icon, iconBg, iconColor, value, label, trend, sub, sparkline }: {
   icon: string; iconBg: string; iconColor: string;
@@ -524,10 +580,11 @@ function AIStats({ stats }: { stats: DashboardStats | null }) {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
-  const [stats, setStats]               = useState<DashboardStats | null>(null);
-  const [loading, setLoading]           = useState(true);
-  const [range, setRange]               = useState("7d");
+  const [stats, setStats]                 = useState<DashboardStats | null>(null);
+  const [loading, setLoading]             = useState(true);
+  const [range, setRange]                 = useState("7d");
   const [channelFilter, setChannelFilter] = useState<string[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -575,6 +632,7 @@ export default function DashboardPage() {
           </div>
           <div className="flex items-center gap-2">
             <ChannelFilter selected={channelFilter} onChange={setChannelFilter} />
+            <AgentFilter agents={stats?.agent_stats ?? []} value={selectedAgent} onChange={setSelectedAgent} />
             <DateRangePicker value={range} onChange={setRange} />
             <div className="w-px h-6 bg-[#E9ECEF] mx-1" />
             <button className="inline-flex items-center gap-1.5 h-9 px-3 rounded-[10px] bg-white border border-[#E9ECEF] text-[#1d1a24] text-[13px] font-medium cursor-pointer">
