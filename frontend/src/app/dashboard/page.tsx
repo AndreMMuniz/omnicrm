@@ -342,7 +342,8 @@ function BarChart({ current, previous, xLabel, yLabel }: {
 function VolumeChart({ daily, prevDaily }: { daily: DayPoint[]; prevDaily: DayPoint[] }) {
   const [view, setView] = useState<VolumeView>("day");
 
-  const fmtDay  = (d: DayPoint, _i: number) => { const dt = new Date(d.date + "T00:00:00"); return dt.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }); };
+  // Backend sends date as "dd/mm" (days>7) or "Mon/Tue" (days<=7) — use as-is
+  const fmtDay  = (d: DayPoint, _i: number) => d.date;
   const fmtWeek = (_d: DayPoint, i: number) => `W${i + 1}`;
 
   const weekly     = useMemo(() => aggregateWeekly(daily), [daily]);
@@ -479,7 +480,7 @@ function AIInsights({ stats }: { stats: DashboardStats | null }) {
     { label: "AI suggestions generated", value: stats.ai_suggestions_generated.toLocaleString(), icon: "auto_awesome", color: "#7C4DFF", bg: "#f5f3ff" },
     { label: "Conversations with AI",    value: stats.convs_with_ai.toLocaleString(),            icon: "smart_toy",    color: "#3B82F6", bg: "#eff6ff" },
     { label: "AI adoption rate",         value: `${stats.ai_adoption_pct.toFixed(1)}%`,          icon: "insights",     color: "#10B981", bg: "#ecfdf5" },
-    { label: "Overall resolution rate",  value: `${(stats.resolution_rate * 100).toFixed(1)}%`,  icon: "check_circle", color: "#F59E0B", bg: "#fffbeb" },
+    { label: "Overall resolution rate",  value: `${stats.resolution_rate.toFixed(1)}%`,           icon: "check_circle", color: "#F59E0B", bg: "#fffbeb" },
   ];
   return (
     <div className="flex flex-col gap-3">
@@ -524,6 +525,7 @@ function SegmentedControl<T extends string>({ options, value, onChange }: {
 export default function DashboardPage() {
   const [stats, setStats]                 = useState<DashboardStats | null>(null);
   const [loading, setLoading]             = useState(true);
+  const [apiError, setApiError]           = useState<string | null>(null);
   const [range, setRange]                 = useState("7d");
   const [channelFilter, setChannelFilter] = useState<string[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
@@ -533,9 +535,16 @@ export default function DashboardPage() {
     let active = true;
     const days = RANGES.find((r) => r.id === range)?.days ?? 7;
     setLoading(true);
+    setApiError(null);
     void dashboardApi.getDashboardStats(days).then((data) => {
       if (active) { setStats(data); setLoading(false); }
-    }).catch(() => { if (active) setLoading(false); });
+    }).catch((err: unknown) => {
+      if (!active) return;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Dashboard] /admin/stats failed:", msg);
+      setApiError(msg);
+      setLoading(false);
+    });
     return () => { active = false; };
   }, [range]);
 
@@ -584,6 +593,15 @@ export default function DashboardPage() {
             <div className="flex items-center justify-center h-32 text-sm text-slate-500">
               <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-indigo-600">progress_activity</span>
               Loading…
+            </div>
+          )}
+          {apiError && (
+            <div className="mb-4 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              <Icon name="error" size={18} fill={1} color="#be123c" />
+              <div>
+                <p className="font-semibold">Failed to load dashboard data</p>
+                <p className="mt-0.5 text-rose-600">{apiError}</p>
+              </div>
             </div>
           )}
 
