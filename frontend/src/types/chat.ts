@@ -131,6 +131,20 @@ export interface DashboardStats {
   ai_suggestions_generated: number;
   convs_with_ai: number;
   ai_adoption_pct: number;
+  // Dashboard widgets
+  top_tags: { tag: string; count: number }[];
+  peak_hours: { dow: number; hour: number; count: number }[];
+  recent_activity: {
+    id: string;
+    contact_name: string;
+    agent_name: string | null;
+    channel: string;
+    status: string;
+    tag: string | null;
+    last_message: string | null;
+    last_message_date: string | null;
+    updated_at: string | null;
+  }[];
 }
 
 export interface DashboardSummary {

@@ -455,21 +455,203 @@ function StatusFunnel({ stats }: { stats: DashboardStats | null }) {
 }
 
 // ── Peak hours heatmap ────────────────────────────────────────────────────────
-// No hourly API endpoint exists yet — shows empty state.
-function Heatmap() {
-  return <NoData message="Hourly message data is not available yet." />;
+type PeakPoint = { dow: number; hour: number; count: number };
+
+function Heatmap({ data }: { data: PeakPoint[] }) {
+  const [hover, setHover] = useState<{ dow: number; hour: number; count: number } | null>(null);
+
+  if (!data.length) return <NoData message="No message data available for this period." />;
+
+  const DAYS  = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  // Show every 2 hours: 0,2,4,...,22
+  const HOURS = Array.from({ length: 24 }, (_, i) => i);
+  const HOUR_LABELS = HOURS.map((h) => h % 2 === 0 ? (h === 0 ? "12a" : h < 12 ? `${h}a` : h === 12 ? "12p" : `${h - 12}p`) : "");
+
+  // Build lookup map: "dow-hour" → count
+  const lookup = new Map<string, number>(data.map((d) => [`${d.dow}-${d.hour}`, d.count]));
+  const maxCount = Math.max(...data.map((d) => d.count), 1);
+
+  const tint = (count: number) => {
+    if (count === 0) return "#f8fafc";
+    const t = count / maxCount;
+    const lerp = (a: number, b: number) => Math.round(a + (b - a) * t);
+    return `rgb(${lerp(245, 124)},${lerp(243, 77)},255)`;
+  };
+
+  const peakPoint = data.reduce((best, d) => d.count > best.count ? d : best, data[0]);
+  const peakLabel = `${DAYS[peakPoint.dow]} ${HOUR_LABELS[peakPoint.hour] || `${peakPoint.hour}h`} · ${peakPoint.count} msg`;
+
+  return (
+    <div>
+      <div className="flex items-center justify-end gap-2 mb-3" style={{ fontSize: 11, color: "#94a3b8" }}>
+        <span>Less</span>
+        {[0.1, 0.3, 0.55, 0.8, 1].map((t) => (
+          <span key={t} style={{ width: 14, height: 14, borderRadius: 3, background: tint(t * maxCount), display: "inline-block" }} />
+        ))}
+        <span>More</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "36px 1fr", gap: 4 }}>
+        {/* Hour labels row */}
+        <div />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(24, 1fr)", gap: 2, marginBottom: 4 }}>
+          {HOURS.map((h) => (
+            <div key={h} style={{ fontSize: 9, color: "#94a3b8", textAlign: "center" }}>
+              {HOUR_LABELS[h]}
+            </div>
+          ))}
+        </div>
+        {/* Day rows */}
+        {DAYS.map((day, dow) => (
+          <React.Fragment key={day}>
+            <div style={{ fontSize: 11, color: C.secondary, fontWeight: 500, display: "flex", alignItems: "center" }}>{day}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(24, 1fr)", gap: 2 }}>
+              {HOURS.map((hour) => {
+                const count = lookup.get(`${dow}-${hour}`) ?? 0;
+                const isHovered = hover?.dow === dow && hover?.hour === hour;
+                return (
+                  <div key={hour}
+                    onMouseEnter={() => setHover({ dow, hour, count })}
+                    onMouseLeave={() => setHover(null)}
+                    style={{
+                      aspectRatio: "1", borderRadius: 3, background: tint(count), cursor: "pointer",
+                      border: isHovered ? `1.5px solid ${C.accent}` : "1px solid rgba(0,0,0,0.02)",
+                    }}
+                    title={`${day} ${hour}h · ${count} msg`}
+                  />
+                );
+              })}
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+      <div className="flex items-center justify-between mt-[10px]" style={{ fontSize: 11, color: "#94a3b8" }}>
+        <span>{hover ? `${DAYS[hover.dow]} ${hover.hour}h · ${hover.count} messages` : "Hover a cell for details"}</span>
+        <span className="inline-flex items-center gap-1">
+          <Icon name="local_fire_department" size={12} color="#F59E0B" />
+          Peak: {peakLabel}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 // ── Recent activity ───────────────────────────────────────────────────────────
-// No real-time feed API exists yet — shows empty state.
-function RecentActivity() {
-  return <NoData message="Recent activity feed is not available yet." />;
+type ActivityItem = DashboardStats["recent_activity"][number];
+
+function RecentActivity({ items }: { items: ActivityItem[] }) {
+  if (!items.length) return <NoData message="No recent conversations." />;
+
+  const STATUS_ICON: Record<string, { icon: string; color: string }> = {
+    OPEN:    { icon: "mark_chat_unread", color: "#7C4DFF" },
+    CLOSED:  { icon: "check_circle",     color: "#10B981" },
+    PENDING: { icon: "schedule",         color: "#F59E0B" },
+  };
+
+  const timeAgo = (iso: string | null) => {
+    if (!iso) return "";
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1)  return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  };
+
+  const initials = (name: string) =>
+    name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
+
+  const AVATAR_COLORS = ["#fef3c7/#92400e", "#dbeafe/#1d4ed8", "#dcfce7/#15803d", "#ede9fe/#7C4DFF", "#fce7f3/#be185d", "#fee2e2/#b91c1c"];
+  const avatarColor = (name: string) => {
+    const pair = AVATAR_COLORS[name.charCodeAt(0) % AVATAR_COLORS.length].split("/");
+    return { bg: pair[0], text: pair[1] };
+  };
+
+  return (
+    <div className="flex flex-col">
+      {items.map((it, i) => {
+        const ch = CHANNEL_MAP[it.channel];
+        const st = STATUS_ICON[it.status] ?? { icon: "chat_bubble", color: "#64748b" };
+        const av = it.agent_name ? avatarColor(it.agent_name) : { bg: "#f1f5f9", text: "#64748b" };
+        return (
+          <div key={it.id} className="flex gap-3 py-[10px]"
+            style={{ borderBottom: i === items.length - 1 ? "none" : `1px solid ${C.outlineVariant}` }}>
+            <div style={{ position: "relative", flexShrink: 0 }}>
+              <div className="flex items-center justify-center text-[11px] font-bold"
+                style={{ width: 32, height: 32, borderRadius: "50%", background: av.bg, color: av.text }}>
+                {it.agent_name ? initials(it.agent_name) : "?"}
+              </div>
+              <div className="flex items-center justify-center absolute"
+                style={{ bottom: -2, right: -2, width: 16, height: 16, borderRadius: "50%", background: "white", border: "1.5px solid white" }}>
+                <span className="flex items-center justify-center"
+                  style={{ width: 12, height: 12, borderRadius: "50%", background: st.color }}>
+                  <Icon name={st.icon} size={8} fill={1} color="white" />
+                </span>
+              </div>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-baseline justify-between gap-2">
+                <div style={{ fontSize: 13, color: C.onSurface, lineHeight: 1.4 }}>
+                  <span style={{ fontWeight: 600 }}>{it.contact_name}</span>
+                  {it.agent_name && <span style={{ color: C.secondary }}> · {it.agent_name}</span>}
+                </div>
+                <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+                  {timeAgo(it.updated_at)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 mt-1">
+                {ch && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: ch.bg, color: ch.text, border: `1px solid ${ch.border}`, borderRadius: 100, padding: "1px 7px", fontSize: 10, fontWeight: 600 }}>
+                    <span style={{ width: 5, height: 5, borderRadius: "50%", background: ch.color, display: "inline-block" }} />
+                    {ch.label}
+                  </span>
+                )}
+                {it.last_message && (
+                  <span style={{ fontSize: 11, color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {it.last_message.slice(0, 60)}{it.last_message.length > 60 ? "…" : ""}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // ── Top tags ──────────────────────────────────────────────────────────────────
-// No tag analytics API exists yet — shows empty state.
-function TopTags() {
-  return <NoData message="Tag analytics are not available yet." />;
+const TAG_COLORS: Record<string, string> = {
+  billing:  "#F59E0B",
+  support:  "#3B82F6",
+  sales:    "#10B981",
+  feedback: "#8B5CF6",
+  general:  "#64748B",
+  spam:     "#EF4444",
+};
+
+function TopTags({ tags }: { tags: { tag: string; count: number }[] }) {
+  if (!tags.length) return <NoData message="No tagged conversations yet." />;
+  const max = Math.max(...tags.map((t) => t.count), 1);
+  return (
+    <div className="flex flex-col gap-[10px]">
+      {tags.map((t) => {
+        const color = TAG_COLORS[t.tag.toLowerCase()] ?? "#94a3b8";
+        const label = t.tag.charAt(0).toUpperCase() + t.tag.slice(1).toLowerCase();
+        return (
+          <div key={t.tag}>
+            <div className="flex justify-between mb-1">
+              <span style={{ fontSize: 12, color: C.onSurface, fontWeight: 500 }}>{label}</span>
+              <span style={{ fontSize: 12, color: C.secondary, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{t.count}</span>
+            </div>
+            <div style={{ height: 8, background: "#f1f5f9", borderRadius: 100, overflow: "hidden" }}>
+              <div style={{ width: `${(t.count / max) * 100}%`, height: "100%", background: color, borderRadius: 100 }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // ── AI insights ───────────────────────────────────────────────────────────────
@@ -648,7 +830,7 @@ export default function DashboardPage() {
           {/* Row 2: Peak hours + Status funnel */}
           <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: "2fr 1fr" }}>
             <Card title="Peak hours" action={<span style={{ fontSize: 11, color: "#94a3b8" }}>Last 7 days · message volume</span>}>
-              <Heatmap />
+              <Heatmap data={stats?.peak_hours ?? []} />
             </Card>
             <Card title="Status funnel" action={<Icon name="more_horiz" size={18} color="#94a3b8" />}>
               <StatusFunnel stats={stats} />
@@ -661,10 +843,10 @@ export default function DashboardPage() {
               action={<span style={{ fontSize: 12, color: C.primary, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 2 }}>
                 View all <Icon name="chevron_right" size={14} color={C.primary} />
               </span>}>
-              <RecentActivity />
+              <RecentActivity items={stats?.recent_activity ?? []} />
             </Card>
             <Card title="Top tags" action={<span style={{ fontSize: 11, color: "#94a3b8" }}>by volume</span>}>
-              <TopTags />
+              <TopTags tags={stats?.top_tags ?? []} />
             </Card>
             <Card title="AI Insights"
               action={

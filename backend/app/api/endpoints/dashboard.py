@@ -273,7 +273,6 @@ async def get_dashboard_stats(
     # ── Story 6.5: AI suggestion usage ───────────────────────────────────────
     ai_suggestions_generated = db.query(func.count(AISuggestion.id)).scalar() or 0
 
-    # Conversations that have at least one AI suggestion
     convs_with_ai = db.query(
         func.count(func.distinct(AISuggestion.conversation_id))
     ).scalar() or 0
@@ -281,6 +280,70 @@ async def get_dashboard_stats(
     ai_adoption_pct = round(
         (convs_with_ai / total * 100) if total > 0 else 0, 1
     )
+
+    # ── Top tags ──────────────────────────────────────────────────────────────
+    from app.models.models import Contact
+    tag_rows = (
+        db.query(Conversation.tag, func.count(Conversation.id))
+        .filter(Conversation.tag.isnot(None))
+        .group_by(Conversation.tag)
+        .order_by(func.count(Conversation.id).desc())
+        .all()
+    )
+    top_tags = [
+        {"tag": row[0].value if hasattr(row[0], "value") else str(row[0]), "count": row[1]}
+        for row in tag_rows
+    ]
+
+    # ── Peak hours (messages grouped by day-of-week + hour) ───────────────────
+    peak_rows = db.execute(text("""
+        SELECT
+            -- PostgreSQL DOW: 0=Sun … 6=Sat → convert to 0=Mon … 6=Sun
+            ((EXTRACT(DOW FROM created_at AT TIME ZONE 'UTC')::int + 6) % 7) AS dow,
+            EXTRACT(HOUR FROM created_at AT TIME ZONE 'UTC')::int           AS hour,
+            COUNT(*)                                                          AS cnt
+        FROM messages
+        WHERE created_at >= :since
+        GROUP BY dow, hour
+        ORDER BY dow, hour
+    """), {"since": period_start}).fetchall()
+    peak_hours = [
+        {"dow": int(r[0]), "hour": int(r[1]), "count": int(r[2])}
+        for r in peak_rows
+    ]
+
+    # ── Recent activity (last 15 conversations by updated_at) ─────────────────
+    recent_rows = db.execute(text("""
+        SELECT
+            c.id,
+            co.name          AS contact_name,
+            u.full_name      AS agent_name,
+            c.channel::text  AS channel,
+            c.status::text   AS status,
+            c.tag::text      AS tag,
+            c.last_message,
+            c.last_message_date,
+            c.updated_at
+        FROM conversations c
+        JOIN contacts co ON co.id = c.contact_id
+        LEFT JOIN users u ON u.id = c.assigned_user_id
+        ORDER BY c.updated_at DESC
+        LIMIT 15
+    """)).fetchall()
+    recent_activity = [
+        {
+            "id": str(r[0]),
+            "contact_name": r[1] or "Unknown",
+            "agent_name": r[2],
+            "channel": (r[3] or "").upper(),
+            "status": (r[4] or "").upper(),
+            "tag": r[5],
+            "last_message": r[6],
+            "last_message_date": r[7].isoformat() if r[7] else None,
+            "updated_at": r[8].isoformat() if r[8] else None,
+        }
+        for r in recent_rows
+    ]
 
     return create_response({
         "total_conversations": total,
@@ -315,4 +378,7 @@ async def get_dashboard_stats(
         "ai_suggestions_generated": ai_suggestions_generated,
         "convs_with_ai": convs_with_ai,
         "ai_adoption_pct": ai_adoption_pct,
+        "top_tags": top_tags,
+        "peak_hours": peak_hours,
+        "recent_activity": recent_activity,
     })
