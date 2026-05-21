@@ -31,6 +31,10 @@ class Settings(BaseModel):
     EMAIL_SMTP_TIMEOUT_SECONDS: int = int(os.getenv("EMAIL_SMTP_TIMEOUT_SECONDS", "8"))
     BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
 
+    # AI Engine — hashing key for searchable PII fields (email_hash, phone_hash)
+    # Must be set in production. In dev, falls back to plain SHA-256 (see hashing.py).
+    DATABASE_HMAC_KEY: str = os.getenv("DATABASE_HMAC_KEY", "")
+
     # Deployment
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")

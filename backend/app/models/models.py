@@ -673,6 +673,47 @@ class ProposalServiceDetails(Base):
     proposal = relationship("Proposal", back_populates="service_details")
 
 
+class LeadStatus(enum.Enum):
+    NEW = "new"
+    CONTACTED = "contacted"
+    CONVERTED = "converted"
+    DISQUALIFIED = "disqualified"
+
+
+class Lead(Base):
+    """AI-detected lead from a closed conversation."""
+    __tablename__ = "leads"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Extracted entities — plaintext name, encrypted email/phone
+    name = Column(String(512), nullable=True)
+    email = Column(EncryptedString, nullable=True)
+    phone = Column(EncryptedString, nullable=True)
+    company = Column(String(512), nullable=True)
+
+    # Deterministic lookup hashes (HMAC-SHA256) — see app/core/hashing.py
+    email_hash = Column(String(64), nullable=True)
+    phone_hash = Column(String(64), nullable=True)
+
+    source_channel = Column(String(50), nullable=False)
+    extraction_confidence = Column(JSON, nullable=False, default=dict)
+    extraction_error = Column(Boolean, nullable=False, default=False)
+    duplicate_risk = Column(Boolean, nullable=False, default=False)
+
+    status = Column(
+        Enum(LeadStatus, values_callable=lambda obj: [e.value for e in obj], name="leadstatus"),
+        nullable=False,
+        default=LeadStatus.NEW,
+    )
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    conversation = relationship("Conversation", foreign_keys=[conversation_id])
+
+
 class ProposalStatusHistory(Base):
     """Histórico imutável de transições de status de uma proposta."""
     __tablename__ = "proposal_status_history"
