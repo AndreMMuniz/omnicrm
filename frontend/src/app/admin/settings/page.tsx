@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import ConfigAreaShell from "@/components/admin/ConfigAreaShell";
 import { settingsApi } from "@/lib/api/index";
 import type { Settings } from "@/types/settings";
 import QuickRepliesPage from "@/app/admin/quick-replies/page";
 
 type TabId = "general" | "visual" | "ai" | "api" | "quick-replies";
+const ALLOWED_TABS: TabId[] = ["general", "visual", "ai", "api", "quick-replies"];
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -91,12 +93,15 @@ function ApiGroup({
 }
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<TabId>("general");
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const searchTab = searchParams.get("tab");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const activeTab: TabId = searchTab && ALLOWED_TABS.includes(searchTab as TabId) ? (searchTab as TabId) : "general";
 
   useEffect(() => {
     settingsApi
@@ -196,7 +201,13 @@ export default function SettingsPage() {
   const backendUrl = process.env.NEXT_PUBLIC_API_URL ?? "https://your-backend.railway.app";
   const whatsappWebhookUrl = `${backendUrl}/api/v1/whatsapp/webhook`;
   return (
-    <ConfigAreaShell activeSection={activeTab} onSectionChange={(section) => setActiveTab(section as TabId)}>
+    <ConfigAreaShell
+      activeSection={activeTab}
+      onSectionChange={(section) => {
+        const nextTab = section as TabId;
+        router.replace(`/admin/settings?tab=${nextTab}`);
+      }}
+    >
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-slate-50">
         <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center border-b border-[#E9ECEF] bg-white px-6">
           <h1 className="text-[18px] font-semibold text-slate-900">Platform Configuration</h1>

@@ -1,117 +1,149 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
+import { ADMIN_NAV_ITEMS, MAIN_NAV_ITEMS, type NavigationChildItem, type NavigationItem } from "@/config/adminNavigation";
 
-type NavItem = {
-  href: string;
-  icon: string;
-  title: string;
-  activePaths?: string[];
-  visible?: (user: ReturnType<typeof useAuth>["user"]) => boolean;
-};
+function isPathActive(pathname: string, path: string) {
+  return pathname === path || pathname.startsWith(`${path}/`);
+}
 
-const MAIN_ITEMS: NavItem[] = [
-  { href: "/dashboard", icon: "dashboard", title: "Dashboard" },
-  { href: "/messages", icon: "chat_bubble", title: "Messages" },
-  { href: "/projects", icon: "view_kanban", title: "Projects" },
-  { href: "/clients", icon: "groups", title: "Clients" },
-  { href: "/proposals", icon: "request_quote", title: "Proposals" },
-  { href: "/catalog", icon: "inventory_2", title: "Catalog" },
-  { href: "/tasks", icon: "task", title: "Tasks" },
-];
+function isChildActive(currentRoute: string, childHref: string) {
+  return currentRoute === childHref;
+}
 
-const ADMIN_DOMAIN_ITEMS: NavItem[] = [
-  {
-    href: "/users",
-    icon: "group",
-    title: "Users",
-    activePaths: ["/users", "/admin/users", "/admin/user-types", "/admin/audit"],
-    visible: (user) => !!(user?.user_type?.can_manage_users || user?.user_type?.can_create_user_types || user?.user_type?.can_view_audit_logs),
-  },
-  {
-    href: "/config",
-    icon: "settings",
-    title: "Config",
-    activePaths: ["/config", "/admin/settings"],
-    visible: (user) => !!user?.user_type?.can_change_settings,
-  },
-];
-
-function isItemActive(pathname: string, item: NavItem) {
+function isItemActive(pathname: string, item: NavigationItem) {
   const paths = item.activePaths ?? [item.href];
-  return paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  return paths.some((path) => isPathActive(pathname, path));
 }
 
 export default function SideNavBar() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const { user, logout } = useAuth();
+  const search = searchParams.toString();
+  const currentRoute = pathname === "/admin/settings" && !search
+    ? "/admin/settings?tab=general"
+    : search
+      ? `${pathname}?${search}`
+      : pathname;
 
-  const visibleAdminItems = ADMIN_DOMAIN_ITEMS.filter((item) => item.visible?.(user) ?? true);
+  const visibleAdminItems = ADMIN_NAV_ITEMS.filter((item) => item.visible?.(user) ?? true);
 
   const handleLogout = async () => {
     await logout();
     router.replace("/login");
   };
 
-  const renderItem = ({ href, icon, title, activePaths }: NavItem) => {
-    const active = isItemActive(pathname, { href, icon, title, activePaths });
+  const renderChildItem = (child: NavigationChildItem) => {
+    const active = isChildActive(currentRoute, child.href);
 
     return (
       <Link
-        key={href}
-        href={href}
-        title={title}
-        className={`relative flex items-center justify-center w-12 h-12 rounded-xl transition-colors ${
+        key={child.href}
+        href={child.href}
+        className={`flex min-h-10 items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors ${
           active
             ? "bg-indigo-50 text-indigo-700"
-            : "text-slate-400 hover:text-slate-700 hover:bg-slate-50"
+            : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
         }`}
       >
-        {active && (
-          <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-indigo-600 rounded-r-full" />
-        )}
-        <span
-          className="material-symbols-outlined text-[22px]"
-          style={active ? { fontVariationSettings: "'FILL' 1" } : {}}
-        >
-          {icon}
-        </span>
+        <span className="material-symbols-outlined text-[18px]">{child.icon ?? "chevron_right"}</span>
+        <span className="font-medium">{child.label}</span>
       </Link>
     );
   };
 
-  return (
-    <nav className="h-full w-[64px] shrink-0 bg-white border-r border-[#E9ECEF] hidden md:flex flex-col items-center py-4">
-      <Link href="/dashboard" className="mb-5 w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shrink-0">
-        <span
-          className="material-symbols-outlined text-white text-[22px]"
-          style={{ fontVariationSettings: "'FILL' 1" }}
+  const renderItem = (item: NavigationItem) => {
+    const active = isItemActive(pathname, item);
+    const showChildren = active && item.children && item.children.length > 0;
+
+    return (
+      <div key={item.href} className="w-full">
+        <Link
+          href={item.href}
+          title={item.title}
+          className={`relative flex min-h-12 items-center gap-3 rounded-2xl px-3 py-3 transition-colors ${
+            active
+              ? "bg-indigo-50 text-indigo-700"
+              : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+          }`}
         >
-          support_agent
-        </span>
-      </Link>
+          {active && <span className="absolute left-0 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full bg-indigo-600" />}
+          <span
+            className="material-symbols-outlined text-[22px]"
+            style={active ? { fontVariationSettings: "'FILL' 1" } : {}}
+          >
+            {item.icon}
+          </span>
+          <span className="min-w-0 flex-1 text-sm font-semibold">{item.title}</span>
+          {item.children && item.children.length > 0 && (
+            <span className="material-symbols-outlined text-[18px] text-slate-400">
+              expand_more
+            </span>
+          )}
+        </Link>
 
-      <div className="flex-1 flex flex-col items-center gap-1 w-full">
-        {MAIN_ITEMS.map(renderItem)}
-
-        {visibleAdminItems.length > 0 && (
-          <>
-            <div className="w-8 my-1 border-t border-[#E9ECEF]" />
-            {visibleAdminItems.map(renderItem)}
-          </>
+        {showChildren && (
+          <div className="mt-2 space-y-1 border-l border-slate-200 pl-4 ml-5">
+            {item.children?.map(renderChildItem)}
+          </div>
         )}
       </div>
+    );
+  };
 
-      <button
-        onClick={handleLogout}
-        title="Sign out"
-        className="flex items-center justify-center w-12 h-12 rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-      >
-        <span className="material-symbols-outlined text-[22px]">logout</span>
-      </button>
+  return (
+    <nav className="hidden h-full w-[272px] shrink-0 flex-col border-r border-[#E9ECEF] bg-white md:flex">
+      <div className="border-b border-[#E9ECEF] px-4 py-4">
+        <Link href="/dashboard" className="flex items-center gap-3 rounded-2xl bg-indigo-600 px-3 py-3 text-white shadow-sm">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/15">
+            <span
+              className="material-symbols-outlined text-white text-[22px]"
+              style={{ fontVariationSettings: "'FILL' 1" }}
+            >
+              support_agent
+            </span>
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-none">omnicrm.chat</p>
+            <p className="mt-1 text-xs text-indigo-100">Workspace navigation</p>
+          </div>
+        </Link>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-3 py-4">
+        <div className="space-y-6">
+          <div className="space-y-1">
+            <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Workspace</p>
+            <div className="mt-2 space-y-1">
+              {MAIN_NAV_ITEMS.map(renderItem)}
+            </div>
+          </div>
+
+          {visibleAdminItems.length > 0 && (
+            <div className="space-y-1">
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Administration</p>
+              <div className="mt-2 space-y-1">
+                {visibleAdminItems.map(renderItem)}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="border-t border-[#E9ECEF] p-3">
+        <button
+          onClick={handleLogout}
+          title="Sign out"
+          className="flex min-h-12 w-full items-center gap-3 rounded-2xl px-3 py-3 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-500"
+        >
+          <span className="material-symbols-outlined text-[22px]">logout</span>
+          <span className="text-sm font-semibold">Sign out</span>
+        </button>
+      </div>
     </nav>
   );
 }
