@@ -102,6 +102,24 @@ class ConversationBase(BaseModel):
     tags: List[ConversationTag] = Field(default_factory=list)
     is_unread: bool = False
 
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_base_tag(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, str):
+            return _normalize_conversation_tag_value(value)
+        return value
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_base_tags(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [_normalize_conversation_tag_value(value)]
+        return [_normalize_conversation_tag_value(item) for item in value]
+
     @field_serializer("status")
     def serialize_status(self, status: ConversationStatus):
         return serialize_conversation_status(status)

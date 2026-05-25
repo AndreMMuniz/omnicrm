@@ -64,7 +64,9 @@ def _conversation_query(db: Session, *, eager: bool = False):
 
 
 def _hydrate_legacy_tags(db: Session, conversation: Conversation) -> Conversation:
-    if _conversation_has_tags_column(db):
+    existing_tags = normalize_conversation_tags(getattr(conversation, "tags", None))
+    if existing_tags:
+        set_committed_value(conversation, "tags", existing_tags)
         return conversation
 
     legacy_tag = getattr(conversation, "tag", None)
