@@ -5,7 +5,9 @@ ConversationService — business logic for conversation state management.
 import asyncio
 import logging
 from typing import Optional
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.models import Conversation, ConversationStatus, ConversationTag
 from app.core.websocket import manager
@@ -30,6 +32,23 @@ def _serialize_tags(conversation: Conversation) -> list[str]:
     return normalize_conversation_tags(getattr(conversation, "tags", None))
 
 
+def _conversation_has_tags_column(db: Session) -> bool:
+    columns = inspect(db.bind).get_columns("conversations")
+    return any(column["name"] == "tags" for column in columns)
+
+
+def _hydrate_legacy_tags(conversation: Conversation) -> Conversation:
+    legacy_tag = getattr(conversation, "tag", None)
+    derived_tags = []
+    if legacy_tag:
+        derived_tags = normalize_conversation_tags([
+            legacy_tag.value if hasattr(legacy_tag, "value") else legacy_tag
+        ])
+
+    set_committed_value(conversation, "tags", derived_tags)
+    return conversation
+
+
 class ConversationService:
     """Manages conversation state changes and real-time notifications."""
 
@@ -38,23 +57,33 @@ class ConversationService:
 
     def update_conversation(self, conversation: Conversation, data: dict) -> Conversation:
         """Apply field updates and persist."""
+        has_tags_column = _conversation_has_tags_column(self.db)
         if "tags" in data:
             normalized_tags = normalize_conversation_tags(data.get("tags"))
-            data["tags"] = normalized_tags
             data["tag"] = ConversationTag[normalized_tags[0].upper()] if normalized_tags else None
+            if has_tags_column:
+                data["tags"] = normalized_tags
+            else:
+                data.pop("tags", None)
         elif "tag" in data:
             normalized_tag = data.get("tag")
             if normalized_tag is None:
-                data["tags"] = []
+                if has_tags_column:
+                    data["tags"] = []
             else:
                 value = normalized_tag.value if hasattr(normalized_tag, "value") else str(normalized_tag).lower()
-                data["tags"] = normalize_conversation_tags([value])
-                data["tag"] = ConversationTag[data["tags"][0].upper()] if data["tags"] else None
+                normalized_tags = normalize_conversation_tags([value])
+                if has_tags_column:
+                    data["tags"] = normalized_tags
+                data["tag"] = ConversationTag[normalized_tags[0].upper()] if normalized_tags else None
 
         for key, value in data.items():
             setattr(conversation, key, value)
         self.db.commit()
-        self.db.refresh(conversation)
+        if has_tags_column:
+            self.db.refresh(conversation)
+        else:
+            _hydrate_legacy_tags(conversation)
         return conversation
 
     async def broadcast_update(self, conversation: Conversation) -> None:

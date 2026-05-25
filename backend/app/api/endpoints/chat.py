@@ -2,7 +2,9 @@ import uuid as _uuid
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from sqlalchemy.orm import Session
+from sqlalchemy import func, inspect
+from sqlalchemy.orm import Session, joinedload, load_only
+from sqlalchemy.orm.attributes import set_committed_value
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.models import Conversation, Message, User
@@ -23,6 +25,57 @@ from app.core.auth import get_current_user, require_permission, get_client_ip
 from app.models.models import ConversationStatus
 
 router = APIRouter()
+
+
+def _conversation_has_tags_column(db: Session) -> bool:
+    columns = inspect(db.bind).get_columns("conversations")
+    return any(column["name"] == "tags" for column in columns)
+
+
+def _conversation_query(db: Session, *, eager: bool = False):
+    query = db.query(Conversation)
+    if eager:
+        query = query.options(
+            joinedload(Conversation.contact),
+            joinedload(Conversation.assigned_user),
+        )
+
+    if not _conversation_has_tags_column(db):
+        query = query.options(
+            load_only(
+                Conversation.id,
+                Conversation.thread_id,
+                Conversation.contact_id,
+                Conversation.assigned_user_id,
+                Conversation.project_context_id,
+                Conversation.channel,
+                Conversation.status,
+                Conversation.tag,
+                Conversation.is_unread,
+                Conversation.last_message,
+                Conversation.last_message_date,
+                Conversation.first_response_at,
+                Conversation.created_at,
+                Conversation.updated_at,
+            )
+        )
+
+    return query
+
+
+def _hydrate_legacy_tags(db: Session, conversation: Conversation) -> Conversation:
+    if _conversation_has_tags_column(db):
+        return conversation
+
+    legacy_tag = getattr(conversation, "tag", None)
+    derived_tags = []
+    if legacy_tag:
+        derived_tags = normalize_conversation_tags([
+            legacy_tag.value if hasattr(legacy_tag, "value") else legacy_tag
+        ])
+
+    set_committed_value(conversation, "tags", derived_tags)
+    return conversation
 
 
 def _normalize_status_filter(status: Optional[str]) -> Optional[ConversationStatus]:
@@ -106,16 +159,8 @@ async def get_conversations(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """List conversations with optional filters. Eager-loads contact and assigned_user."""
-    from sqlalchemy.orm import joinedload
-    from app.models.models import Contact, User
-
-    q = (
-        db.query(Conversation)
-        .options(
-            joinedload(Conversation.contact),
-            joinedload(Conversation.assigned_user),
-        )
-    )
+    has_tags_column = _conversation_has_tags_column(db)
+    q = _conversation_query(db, eager=True)
     if status:
         normalized_status = _normalize_status_filter(status)
         if normalized_status:
@@ -123,15 +168,19 @@ async def get_conversations(
     if tag:
         normalized_tag = normalize_conversation_tags([tag])
         if normalized_tag:
-            q = q.filter(
-                (Conversation.tag == normalized_tag[0]) |
-                (Conversation.tags.contains([normalized_tag[0]]))
-            )
+            if has_tags_column:
+                q = q.filter(
+                    (Conversation.tag == normalized_tag[0]) |
+                    (Conversation.tags.contains([normalized_tag[0]]))
+                )
+            else:
+                q = q.filter(Conversation.tag == normalized_tag[0])
     if assigned_user_id:
         q = q.filter(Conversation.assigned_user_id == assigned_user_id)
 
-    total = q.count()
+    total = q.order_by(None).with_entities(func.count(Conversation.id)).scalar() or 0
     conversations = q.order_by(Conversation.last_message_date.desc().nulls_last()).offset(skip).limit(limit).all()
+    conversations = [_hydrate_legacy_tags(db, conversation) for conversation in conversations]
     return create_paginated_response(
         data=[ConversationResponse.model_validate(c) for c in conversations],
         total=total,
@@ -169,7 +218,7 @@ async def get_conversation_messages(
     """Get all messages for a specific conversation."""
     from sqlalchemy.orm import joinedload
 
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
             code="CONVERSATION_NOT_FOUND",
@@ -216,7 +265,7 @@ async def delete_conversation(
         )
         raise HTTPException(status_code=status, detail=error_response)
 
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
             code="CONVERSATION_NOT_FOUND", message="Conversation not found", status_code=404
@@ -240,7 +289,7 @@ async def update_conversation(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Update conversation status, tag, or read state."""
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
             code="CONVERSATION_NOT_FOUND",
@@ -265,6 +314,7 @@ async def update_conversation(
     conversation = await svc.update_and_broadcast(
         conversation, update_data.model_dump(exclude_unset=True)
     )
+    conversation = _hydrate_legacy_tags(db, conversation)
     return create_response(ConversationResponse.model_validate(conversation))
 
 
@@ -277,7 +327,7 @@ async def send_message(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Send a message from the dashboard to a conversation."""
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
             code="CONVERSATION_NOT_FOUND",
@@ -310,7 +360,7 @@ async def create_internal_note(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Persist an internal note on a conversation without sending anything to external channels."""
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
             code="CONVERSATION_NOT_FOUND",
@@ -361,7 +411,8 @@ async def assign_conversation(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Assign or unassign a conversation to an agent. Pass {assigned_user_id: uuid|null}."""
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    has_tags_column = _conversation_has_tags_column(db)
+    conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
             code="CONVERSATION_NOT_FOUND", message="Conversation not found", status_code=404
@@ -384,11 +435,15 @@ async def assign_conversation(
             )
             raise HTTPException(status_code=status, detail=error_response)
         conversation.assigned_user_id = user.id
+        conversation.assigned_user = user
     else:
         conversation.assigned_user_id = None
+        conversation.assigned_user = None
 
     db.commit()
-    db.refresh(conversation)
+    if has_tags_column:
+        db.refresh(conversation)
+    conversation = _hydrate_legacy_tags(db, conversation)
 
     log_action(
         db,
@@ -411,7 +466,7 @@ async def assign_conversation(
             "id": str(conversation.id),
             "status": serialize_conversation_status(conversation.status),
             "tag": conversation.tag.value if conversation.tag else None,
-            "tags": normalize_conversation_tags(conversation.tags),
+            "tags": normalize_conversation_tags(getattr(conversation, "tags", None)),
             "is_unread": conversation.is_unread,
             "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
             "assigned_user": AssignedUserSlim.model_validate(conversation.assigned_user).model_dump(mode="json")
@@ -420,6 +475,7 @@ async def assign_conversation(
         },
     )
 
+    conversation = _hydrate_legacy_tags(db, conversation)
     return create_response(ConversationResponse.model_validate(conversation))
 
 
@@ -436,7 +492,7 @@ async def retry_message(
     """Retry a failed outbound message (max 3 attempts)."""
     from app.models.models import Message, DeliveryStatus
 
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
             code="CONVERSATION_NOT_FOUND", message="Conversation not found", status_code=404
@@ -482,7 +538,7 @@ async def delete_message(
     """Delete a message if it is not referenced by downstream project provenance."""
     from app.models.models import Project
 
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
             code="CONVERSATION_NOT_FOUND", message="Conversation not found", status_code=404
@@ -523,7 +579,9 @@ async def delete_message(
     conversation.last_message_date = latest_message.created_at if latest_message else None
     conversation.is_unread = latest_message.inbound if latest_message else False
     db.commit()
-    db.refresh(conversation)
+    if _conversation_has_tags_column(db):
+        db.refresh(conversation)
+    conversation = _hydrate_legacy_tags(db, conversation)
 
     log_action(
         db,
@@ -546,7 +604,7 @@ async def delete_message(
             "id": str(conversation.id),
             "status": serialize_conversation_status(conversation.status),
             "tag": conversation.tag.value if conversation.tag else None,
-            "tags": normalize_conversation_tags(conversation.tags),
+            "tags": normalize_conversation_tags(getattr(conversation, "tags", None)),
             "is_unread": conversation.is_unread,
         },
     )
@@ -578,7 +636,7 @@ async def generate_suggestions(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Generate fresh AI reply suggestions using LLM. Replaces cached suggestions."""
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
             code="CONVERSATION_NOT_FOUND",
