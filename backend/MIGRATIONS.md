@@ -4,19 +4,30 @@ This document describes how to validate and apply Alembic migrations on Supabase
 
 ## Migration Chain
 
-9 migrations in linear order:
-
 | # | Revision | Description |
 |---|----------|-------------|
-| 1 | `de45c95bc364` | Initial schema |
-| 2 | `bf57d943ecd0` | RBAC + missing columns |
-| 3 | `c9f2e1d3a8b5` | API credentials to settings |
-| 4 | `d7e3f9a1b2c4` | is_approved to users |
-| 5 | `e8f4a2c6d9b1` | Message sequencing |
-| 6 | `f1a2b3c4d5e6` | Extend conversation_tag enum |
-| 7 | `g2b3c4d5e6f7` | delivery_status on messages |
-| 8 | `h3c4d5e6f7a8` | first_response_at on conversations |
-| 9 | `i4d5e6f7a8b9` | Encrypt existing credentials (data migration) |
+| 1  | `de45c95bc364` | Initial schema |
+| 2  | `bf57d943ecd0` | RBAC + missing columns |
+| 3  | `c9f2e1d3a8b5` | API credentials to settings |
+| 4  | `d7e3f9a1b2c4` | is_approved to users |
+| 5  | `e8f4a2c6d9b1` | Message sequencing |
+| 6  | `f1a2b3c4d5e6` | Extend conversation_tag enum |
+| 7  | `g2b3c4d5e6f7` | delivery_status on messages |
+| 8  | `h3c4d5e6f7a8` | first_response_at on conversations |
+| 9  | `i4d5e6f7a8b9` | Encrypt existing credentials (data migration) |
+| 10 | `j5e6f7a8b9c0` | Telegram bot token |
+| 11 | `k6f7g8h9i0j1` | Projects foundation |
+| 12 | `l7h8i9j0k1l2` | Project context links |
+| 13 | `m8i9j0k1l2m3` | Project tasks |
+| 14 | `n9j0k1l2m3n4` | Project task automation |
+| 15 | `o1p2q3r4s5t6` | Catalog items |
+| 16 | `p2q3r4s5t6u7` | Proposals |
+| 17 | `q3r4s5t6u7v8` | Catalog categories + audit fields |
+| 18 | `r4s5t6u7v8w9` | Clients + proposal commercial fields |
+| 19 | `x1y2z3a4b5c6` | client_id to contacts |
+| 20 | `y2z3a4b5c6d7` | Make client email optional |
+| 21 | `z3a4b5c6d7e8` | Remove email/phone from clients |
+| 22 | `a1b2c3d4e5f6` | **AI Engine Sprint 1 — leads table** (email_hash, phone_hash, HMAC lookup indexes) |
 
 ## Prerequisites
 
@@ -32,7 +43,7 @@ This document describes how to validate and apply Alembic migrations on Supabase
 python scripts/validate_migrations.py
 ```
 
-Expected output: `PASS Chain is valid - 9 migrations, linear, no gaps`
+Expected output: `PASS Chain is valid - 22 migrations, linear, no gaps`
 
 ### 2. Check current migration state on staging
 
@@ -101,7 +112,24 @@ ORDER BY enumlabel;
 
 ```sql
 SELECT version_num FROM alembic_version;
--- Must return: i4d5e6f7a8b9
+-- Must return: a1b2c3d4e5f6
+```
+
+### Verify leads table (migration 22)
+
+```sql
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'leads'
+ORDER BY ordinal_position;
+-- Expected: id, conversation_id, name, email, phone, company,
+--           email_hash, phone_hash, source_channel,
+--           extraction_confidence, extraction_error, duplicate_risk,
+--           status, created_at, updated_at
+
+SELECT indexname FROM pg_indexes WHERE tablename = 'leads';
+-- Expected indexes: ix_leads_conversation_id, ix_leads_created_at,
+--                   ix_leads_status, ix_leads_source_channel,
+--                   ix_leads_email_hash (unique partial), ix_leads_phone_hash (unique partial)
 ```
 
 ### 6. Validate with the script (full mode)
