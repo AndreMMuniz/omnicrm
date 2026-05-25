@@ -2,15 +2,14 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, text
+from sqlalchemy.orm import Session
+from sqlalchemy import func, inspect, text
 
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.core.limiter import limiter
 from app.models.models import (
     AISuggestion,
-    ChannelType,
     Conversation,
     ConversationStatus,
     Message,
@@ -20,11 +19,15 @@ from app.models.models import (
     ProjectTaskStatus,
     Proposal,
     ProposalStatus,
-    User,
 )
 from app.schemas.common import create_response
 
 router = APIRouter()
+
+
+def _conversation_has_tags_column(db: Session) -> bool:
+    columns = inspect(db.bind).get_columns("conversations")
+    return any(column["name"] == "tags" for column in columns)
 
 
 @router.get("/dashboard-summary")
@@ -104,15 +107,18 @@ async def get_dashboard_stats(
     resolution_rate = round((closed_count / total * 100) if total > 0 else 0, 1)
 
     # ── Avg resolution time (hours) — closed conversations in selected period
-    closed_in_period = db.query(Conversation).filter(
+    closed_in_period = db.query(
+        Conversation.created_at,
+        Conversation.updated_at,
+    ).filter(
         Conversation.status == ConversationStatus.CLOSED,
         Conversation.updated_at >= period_start,
     ).all()
     if closed_in_period:
         total_hours = sum(
-            (c.updated_at - c.created_at).total_seconds() / 3600
-            for c in closed_in_period
-            if c.updated_at and c.created_at and c.updated_at > c.created_at
+            (updated_at - created_at).total_seconds() / 3600
+            for created_at, updated_at in closed_in_period
+            if updated_at and created_at and updated_at > created_at
         )
         avg_resolution_hours = round(total_hours / len(closed_in_period), 1)
     else:
@@ -190,16 +196,19 @@ async def get_dashboard_stats(
     )
 
     # Avg first-response time (minutes) for conversations in the period
-    resp_rows = db.query(Conversation).filter(
+    resp_rows = db.query(
+        Conversation.created_at,
+        Conversation.first_response_at,
+    ).filter(
         Conversation.first_response_at.isnot(None),
         Conversation.created_at >= period_start,
     ).all()
     if resp_rows:
         avg_first_response_min = round(
             sum(
-                (c.first_response_at - c.created_at).total_seconds() / 60
-                for c in resp_rows
-                if c.first_response_at and c.created_at and c.first_response_at > c.created_at
+                (first_response_at - created_at).total_seconds() / 60
+                for created_at, first_response_at in resp_rows
+                if first_response_at and created_at and first_response_at > created_at
             ) / len(resp_rows), 1
         )
     else:
@@ -282,9 +291,18 @@ async def get_dashboard_stats(
     )
 
     # ── Top tags ──────────────────────────────────────────────────────────────
-    from app.models.models import Contact
     tag_counts: dict[str, int] = {}
-    tag_sources = db.query(Conversation.tags, Conversation.tag).all()
+    if _conversation_has_tags_column(db):
+        tag_sources = db.execute(text("""
+            SELECT tags, tag::text
+            FROM conversations
+        """)).fetchall()
+    else:
+        tag_sources = db.execute(text("""
+            SELECT NULL AS tags, tag::text
+            FROM conversations
+        """)).fetchall()
+
     for tags_value, legacy_tag in tag_sources:
         if tags_value:
             for item in tags_value:
