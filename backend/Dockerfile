@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM python:3.13-slim-bookworm AS base
 
-# Instalar dependências de sistema necessárias para compilar pacotes nativos
+# Install system dependencies required for native Python packages.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
@@ -9,15 +9,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copiar e instalar dependências primeiro (aproveita cache de build)
+# Install Python dependencies first to maximize Docker layer cache reuse.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar o restante da aplicação
+# Copy the application source and enable the container entrypoint.
 COPY . .
+RUN chmod +x /app/docker-entrypoint.sh
 
-# Expor a porta (Railway sobrescreve via $PORT, mas é boa prática)
 EXPOSE 8000
 
-# Railway injeta a variável PORT automaticamente
+# The entrypoint runs migrations; the CMD defines the default API process.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
