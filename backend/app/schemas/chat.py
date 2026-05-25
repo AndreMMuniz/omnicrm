@@ -73,6 +73,10 @@ class ConversationUpdate(BaseModel):
             return value.lower()
         return value
 
+
+class ConversationAssignmentUpdate(BaseModel):
+    assigned_user_id: Optional[UUID] = None
+
 class AssignedUserSlim(BaseModel):
     id: UUID
     full_name: str

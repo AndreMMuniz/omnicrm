@@ -3,6 +3,7 @@
 import { apiGet, apiGetList, apiMutate } from "@/lib/apiClient";
 import type { ApiResponse } from "@/types/api";
 import type {
+  AssignedUser,
   ClientMatch,
   Conversation,
   Message,
@@ -28,9 +29,14 @@ function toBackendConversationUpdate(data: UpdateConversationRequest) {
 }
 
 export async function getConversations(
-  limit = 100
+  limit = 100,
+  params?: { assigned_user_id?: string | null }
 ): Promise<ApiResponse<Conversation[]>> {
-  const response = await apiGetList<Conversation>(`/chat/conversations?limit=${limit}`);
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (params?.assigned_user_id) {
+    query.set("assigned_user_id", params.assigned_user_id);
+  }
+  const response = await apiGetList<Conversation>(`/chat/conversations?${query.toString()}`);
   return {
     ...response,
     data: response.data.map(normalizeConversation),
@@ -79,6 +85,10 @@ export async function assignConversation(
     { assigned_user_id: assignedUserId }
   );
   return normalizeConversation(updated);
+}
+
+export async function getAssignableUsers(): Promise<AssignedUser[]> {
+  return apiGet<AssignedUser[]>("/chat/assignable-users");
 }
 
 export async function deleteConversation(conversationId: string): Promise<void> {

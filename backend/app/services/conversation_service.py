@@ -13,6 +13,18 @@ from app.core.websocket import manager
 log = logging.getLogger(__name__)
 
 
+def _serialize_assigned_user(conversation: Conversation) -> Optional[dict]:
+    user = conversation.assigned_user
+    if not user:
+        return None
+    return {
+        "id": str(user.id),
+        "full_name": user.full_name,
+        "email": user.email,
+        "avatar": user.avatar,
+    }
+
+
 class ConversationService:
     """Manages conversation state changes and real-time notifications."""
 
@@ -34,6 +46,8 @@ class ConversationService:
             "status": conversation.status.value if conversation.status else None,
             "tag": conversation.tag.value if conversation.tag else None,
             "is_unread": conversation.is_unread,
+            "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
+            "assigned_user": _serialize_assigned_user(conversation),
         })
 
     async def update_and_broadcast(

@@ -5,10 +5,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSo
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.models.models import Conversation, Message
-from app.schemas.chat import ConversationResponse, ConversationUpdate, MessageResponse, AISuggestionResponse
+from app.models.models import Conversation, Message, User
+from app.schemas.chat import (
+    AISuggestionResponse,
+    AssignedUserSlim,
+    ConversationAssignmentUpdate,
+    ConversationResponse,
+    ConversationUpdate,
+    MessageResponse,
+)
 from app.schemas.common import create_response, create_paginated_response, create_error_response
 from app.core.websocket import manager  # still used by WebSocket endpoint
+from app.core.auth import get_current_user, require_permission, get_client_ip
 
 router = APIRouter()
 
@@ -103,6 +111,23 @@ async def get_conversations(
         page_size=limit,
     )
 
+
+@router.get("/assignable-users")
+@limiter.limit("60/minute")
+async def list_assignable_users(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """List approved and active internal users available for conversation ownership."""
+    users = (
+        db.query(User)
+        .filter(User.is_approved == True, User.is_active == True)
+        .order_by(User.full_name.asc())
+        .all()
+    )
+    return create_response([AssignedUserSlim.model_validate(user) for user in users])
+
 @router.get("/conversations/{conversation_id}/messages")
 @limiter.limit("60/minute")
 async def get_conversation_messages(request: Request, conversation_id: UUID, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)) -> Dict[str, Any]:
@@ -129,8 +154,6 @@ from app.schemas.chat import MessageCreate
 from app.services.conversation_service import ConversationService, get_conversation_service
 from app.services.message_service import MessageService, get_message_service
 from app.models.models import AISuggestion
-from app.core.auth import get_current_user, require_permission, get_client_ip
-from app.models.models import User
 from app.services.audit_service import log_action
 
 @router.delete("/conversations/{conversation_id}")
@@ -226,13 +249,11 @@ async def send_message(
 async def assign_conversation(
     request: Request,
     conversation_id: UUID,
-    body: Dict[str, Any],
+    body: ConversationAssignmentUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Assign or unassign a conversation to an agent. Pass {assigned_user_id: uuid|null}."""
-    from app.models.models import User
-    from app.services.audit_service import log_action
-
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
@@ -240,10 +261,16 @@ async def assign_conversation(
         )
         raise HTTPException(status_code=status, detail=error_response)
 
-    new_uid = body.get("assigned_user_id")
+    previous_assigned_user_id = conversation.assigned_user_id
+    previous_assigned_user_name = conversation.assigned_user.full_name if conversation.assigned_user else None
+    new_uid = body.assigned_user_id
 
     if new_uid:
-        user = db.query(User).filter(User.id == new_uid).first()
+        user = (
+            db.query(User)
+            .filter(User.id == new_uid, User.is_approved == True, User.is_active == True)
+            .first()
+        )
         if not user:
             error_response, status = create_error_response(
                 code="USER_NOT_FOUND", message="User not found", status_code=404
@@ -256,10 +283,33 @@ async def assign_conversation(
     db.commit()
     db.refresh(conversation)
 
-    await manager.broadcast_to_conversation(
-        conversation_id=str(conversation_id),
-        event_type="conversation_updated",
-        data={"conversation_id": str(conversation_id), "assigned_user_id": str(new_uid) if new_uid else None},
+    log_action(
+        db,
+        current_user.id,
+        "assign_conversation",
+        "conversation",
+        str(conversation_id),
+        details={
+            "previous_assigned_user_id": str(previous_assigned_user_id) if previous_assigned_user_id else None,
+            "previous_assigned_user_name": previous_assigned_user_name,
+            "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
+            "assigned_user_name": conversation.assigned_user.full_name if conversation.assigned_user else None,
+        },
+        ip_address=get_client_ip(request),
+    )
+
+    await manager.broadcast_global(
+        "conversation_updated",
+        {
+            "id": str(conversation.id),
+            "status": conversation.status.value if conversation.status else None,
+            "tag": conversation.tag.value if conversation.tag else None,
+            "is_unread": conversation.is_unread,
+            "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
+            "assigned_user": AssignedUserSlim.model_validate(conversation.assigned_user).model_dump(mode="json")
+            if conversation.assigned_user
+            else None,
+        },
     )
 
     return create_response(ConversationResponse.model_validate(conversation))

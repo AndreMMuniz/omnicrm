@@ -16,26 +16,22 @@ import Modal from '@/components/shared/Modal';
 import { useAuth } from '@/hooks/useAuth';
 import { useAISuggestions } from '@/hooks/useAISuggestions';
 import { useQuickReplySearch } from '@/hooks/useQuickReplies';
-import { conversationsApi, usersApi, quickRepliesApi, projectsApi, clientsApi } from '@/lib/api/index';
+import { conversationsApi, quickRepliesApi, projectsApi, clientsApi } from '@/lib/api/index';
 import type { ChannelType, Conversation, ConversationTag, Message } from '@/types/chat';
 import type { ClientListDto } from '@/types/client';
 import type { ProjectDto, ProjectPriority, ProjectStage, ProjectStageKey, ProjectTaskDto, ProjectTaskStatus } from '@/types/project';
 import AudioMessage from '@/components/AudioMessage';
-import { useState as useLocalState, useEffect as useLocalEffect } from 'react';
+import { useState as useLocalState } from 'react';
 import { useMessagesSessionContext } from '@/contexts/MessagesSessionContext';
 
 // ── Assignment Panel (Story 3.5) ──────────────────────────────────────────────
 
-function AssignmentPanel({ conversation, onAssign }: {
+function AssignmentPanel({ conversation, agents, onAssign }: {
   conversation: Conversation;
+  agents: { id: string; full_name: string }[];
   onAssign: (userId: string | null) => Promise<void>;
 }) {
-  const [agents, setAgents] = useLocalState<{ id: string; full_name: string }[]>([]);
   const [saving, setSaving] = useLocalState(false);
-
-  useLocalEffect(() => {
-    usersApi.listUsers(100).then(r => setAgents(r.data ?? [])).catch(() => {});
-  }, []);
 
   const handleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSaving(true);
@@ -44,7 +40,11 @@ function AssignmentPanel({ conversation, onAssign }: {
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Owner</span>
+        <ConversationOwnerBadge conversation={conversation} />
+      </div>
       <select
         value={conversation.assigned_user_id ?? ''}
         onChange={handleChange}
@@ -57,6 +57,77 @@ function AssignmentPanel({ conversation, onAssign }: {
         ))}
       </select>
       {saving && <span className="material-symbols-outlined text-[16px] text-slate-400 animate-spin">progress_activity</span>}
+    </div>
+  );
+}
+
+function ConversationOwnerBadge({
+  conversation,
+  className,
+}: {
+  conversation: Conversation;
+  className?: string;
+}) {
+  const assignedUser = conversation.assigned_user;
+  const isAssigned = Boolean(assignedUser);
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+        isAssigned
+          ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+          : "border-dashed border-slate-300 bg-slate-50 text-slate-500",
+        className
+      )}
+    >
+      <span className="material-symbols-outlined text-[12px]">
+        {isAssigned ? "person" : "person_off"}
+      </span>
+      <span>{assignedUser?.full_name ?? "Unassigned"}</span>
+    </span>
+  );
+}
+
+function InboxOwnerSelect({
+  conversation,
+  agents,
+  onAssign,
+}: {
+  conversation: Conversation;
+  agents: { id: string; full_name: string }[];
+  onAssign: (userId: string | null) => Promise<void>;
+}) {
+  const [saving, setSaving] = useLocalState(false);
+
+  const handleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    e.stopPropagation();
+    setSaving(true);
+    await onAssign(e.target.value || null).catch(() => {});
+    setSaving(false);
+  };
+
+  return (
+    <div
+      className="flex items-center gap-1.5"
+      onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <select
+        value={conversation.assigned_user_id ?? ""}
+        onChange={handleChange}
+        disabled={saving}
+        className="h-7 max-w-[132px] rounded-full border border-slate-200 bg-white px-2 text-[10px] font-medium text-slate-600 outline-none transition focus:border-indigo-300"
+      >
+        <option value="">Unassigned</option>
+        {agents.map((agent) => (
+          <option key={agent.id} value={agent.id}>
+            {agent.full_name}
+          </option>
+        ))}
+      </select>
+      {saving ? (
+        <span className="material-symbols-outlined text-[13px] text-slate-400 animate-spin">progress_activity</span>
+      ) : null}
     </div>
   );
 }
@@ -869,6 +940,7 @@ export default function ChatPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedChannel, setSelectedChannel] = useState<'ALL' | ChannelType>('ALL');
   const [selectedTag, setSelectedTag] = useState<'ALL' | ConversationTag>('ALL');
+  const [selectedOwner, setSelectedOwner] = useState<'ALL' | 'UNASSIGNED' | string>('ALL');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -919,9 +991,20 @@ export default function ChatPage() {
   const [deletingMessage, setDeletingMessage] = useState(false);
   const [handledQueryConversationId, setHandledQueryConversationId] = useState<string | null>(null);
   const [showConnectionBanner, setShowConnectionBanner] = useState(false);
+  const [assignableUsers, setAssignableUsers] = useState<{ id: string; full_name: string }[]>([]);
 
   useEffect(() => {
     quickRepliesApi.listQuickReplies().then(r => setAllQuickReplies(r.data ?? [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    conversationsApi.getAssignableUsers()
+      .then((users) => {
+        setAssignableUsers(users.map((item) => ({ id: item.id, full_name: item.full_name })));
+      })
+      .catch(() => {
+        setAssignableUsers([]);
+      });
   }, []);
 
 
@@ -1108,7 +1191,7 @@ export default function ChatPage() {
   ]);
 
   const availableChannels = Object.keys(CHANNEL_META) as ChannelType[];
-  const hasActiveFilters = Boolean(searchQuery.trim()) || selectedChannel !== 'ALL' || selectedTag !== 'ALL';
+  const hasActiveFilters = Boolean(searchQuery.trim()) || selectedChannel !== 'ALL' || selectedTag !== 'ALL' || selectedOwner !== 'ALL';
   const selectedTagLabel = selectedTag === 'ALL' ? null : TAG_META[selectedTag].label;
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const canUseAISuggestions = Boolean(activeConversation && lastMessage?.inbound);
@@ -1118,6 +1201,10 @@ export default function ChatPage() {
       ? `No conversations match the ${selectedTagLabel} tag with the current filters`
       : selectedChannel !== 'ALL'
         ? `No conversations match the ${getChannelMeta(selectedChannel).label} channel with the current filters`
+        : selectedOwner === 'UNASSIGNED'
+          ? 'No unassigned conversations match the current filters'
+          : selectedOwner !== 'ALL'
+            ? 'No conversations match the selected owner with the current filters'
         : 'No conversations match the current filters';
 
   const filteredConversations = sortedConversations.filter((c) => {
@@ -1128,9 +1215,16 @@ export default function ChatPage() {
     );
     const matchesChannel = selectedChannel === 'ALL' || c.channel.toUpperCase() === selectedChannel;
     const matchesTag = selectedTag === 'ALL' || c.tag === selectedTag;
+    const matchesOwner = selectedOwner === 'ALL'
+      || (selectedOwner === 'UNASSIGNED' ? !c.assigned_user_id : c.assigned_user_id === selectedOwner);
 
-    return matchesSearch && matchesChannel && matchesTag;
+    return matchesSearch && matchesChannel && matchesTag && matchesOwner;
   });
+
+  const assignConversationOwner = useCallback(async (conversationId: string, userId: string | null) => {
+    await conversationsApi.assignConversation(conversationId, userId);
+    await fetchConversations();
+  }, [fetchConversations]);
 
   const openCreateCardModalForMessage = useCallback(async (message: Message) => {
     if (!activeConversation) return;
@@ -1695,6 +1789,24 @@ export default function ChatPage() {
                   expand_more
                 </span>
               </div>
+              <div className="relative">
+                <select
+                  value={selectedOwner}
+                  onChange={(event) => setSelectedOwner(event.target.value)}
+                  className="h-8 w-full appearance-none rounded-full border border-slate-200 bg-white px-3 pr-8 text-[11px] font-semibold text-slate-600 outline-none transition-colors"
+                >
+                  <option value="ALL">All owners</option>
+                  <option value="UNASSIGNED">Unassigned</option>
+                  {assignableUsers.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.full_name}
+                    </option>
+                  ))}
+                </select>
+                <span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[16px] text-slate-500">
+                  expand_more
+                </span>
+              </div>
             </div>
           </div>
           
@@ -1709,6 +1821,7 @@ export default function ChatPage() {
                       setSearchQuery('');
                       setSelectedChannel('ALL');
                       setSelectedTag('ALL');
+                      setSelectedOwner('ALL');
                     }}
                     className="mt-3 inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-800"
                   >
@@ -1779,6 +1892,7 @@ export default function ChatPage() {
                     {/* Tag + SLA row */}
                     <div className="flex items-center gap-1 mb-0.5 flex-wrap">
                       <TagBadge tag={conv.tag ?? undefined} />
+                      <ConversationOwnerBadge conversation={conv} />
                       {sla && (
                         <span className="inline-flex items-center gap-[1px] text-[9px] font-bold text-[#ef4444]">
                           <span className="material-symbols-outlined text-[10px]" style={{ fontVariationSettings: "'FILL' 1" }}>warning</span>
@@ -1786,10 +1900,17 @@ export default function ChatPage() {
                         </span>
                       )}
                     </div>
-                    <p className="text-[12px] truncate"
-                      style={{ color: conv.is_unread ? '#374151' : '#94a3b8', fontWeight: conv.is_unread ? 500 : 400 }}>
-                      {conv.last_message || 'No messages'}
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="min-w-0 text-[12px] truncate"
+                        style={{ color: conv.is_unread ? '#374151' : '#94a3b8', fontWeight: conv.is_unread ? 500 : 400 }}>
+                        {conv.last_message || 'No messages'}
+                      </p>
+                      <InboxOwnerSelect
+                        conversation={conv}
+                        agents={assignableUsers}
+                        onAssign={(userId) => assignConversationOwner(conv.id, userId)}
+                      />
+                    </div>
                   </div>
                 </div>
               );
@@ -1848,6 +1969,7 @@ export default function ChatPage() {
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                       <ChannelBadge channel={activeConversation.channel} compact />
                       <TagBadge tag={activeConversation.tag} />
+                      <ConversationOwnerBadge conversation={activeConversation} />
                       {(() => {
                         const wt = waitingTime(activeConversation.last_message_date, activeConversation.is_unread);
                         if (!wt?.slaBreached) return null;
@@ -2787,9 +2909,9 @@ export default function ChatPage() {
                       <p className="text-[10px] font-bold text-[#575f67] uppercase mb-2" style={{ letterSpacing: '0.06em' }}>Assigned Agent</p>
                       <AssignmentPanel
                         conversation={activeConversation}
+                        agents={assignableUsers}
                         onAssign={async (userId) => {
-                          await conversationsApi.assignConversation(activeConversation.id, userId);
-                          fetchConversations();
+                          await assignConversationOwner(activeConversation.id, userId);
                         }}
                       />
                     </div>
