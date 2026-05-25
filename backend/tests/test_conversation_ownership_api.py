@@ -17,6 +17,7 @@ from app.models.models import (
     Contact,
     Conversation,
     ConversationStatus,
+    ConversationTag,
     DefaultRole,
     Message,
     Project,
@@ -420,3 +421,46 @@ def test_create_internal_note_respects_ownership_permissions(db):
 
     assert response.status_code == 403
     assert response.json()["detail"]["error"]["code"] == "FORBIDDEN"
+
+
+def test_update_conversation_supports_multiple_tags_and_legacy_primary_tag(db, monkeypatch):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WEB,
+        status=ConversationStatus.OPEN,
+        tag=ConversationTag.SUPPORT,
+        tags=["support"],
+    )
+    db.add(conversation)
+    db.commit()
+
+    events = []
+
+    async def fake_broadcast_global(event_type, data):
+        events.append((event_type, data))
+
+    monkeypatch.setattr(manager, "broadcast_global", fake_broadcast_global)
+
+    client = _make_client(db, current_user)
+    response = client.patch(
+        f"/api/v1/chat/conversations/{conversation.id}",
+        json={"tags": ["sales", "billing", "sales"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["tags"] == ["sales", "billing"]
+    assert payload["tag"] == "sales"
+
+    db.refresh(conversation)
+    assert conversation.tags == ["sales", "billing"]
+    assert conversation.tag == ConversationTag.SALES
+
+    assert events[0][1]["tags"] == ["sales", "billing"]
+    assert events[0][1]["tag"] == "sales"

@@ -11,10 +11,26 @@ type MessagesSessionCache = {
   conversations: Conversation[];
   messagesByConversation: Record<string, Message[]>;
   activeConversationId: string | null;
+  filters: MessagesWorkspaceFilters;
   updatedAt: string;
 };
 
+export type MessagesWorkspaceFilters = {
+  searchQuery: string;
+  selectedChannel: string;
+  selectedStatus: string;
+  selectedTag: string;
+  selectedOwner: string;
+};
+
 const memoryCache = new Map<string, MessagesSessionCache>();
+const DEFAULT_FILTERS: MessagesWorkspaceFilters = {
+  searchQuery: "",
+  selectedChannel: "ALL",
+  selectedStatus: "ALL",
+  selectedTag: "ALL",
+  selectedOwner: "ALL",
+};
 
 function buildKey(userId: string) {
   return `${CACHE_PREFIX}:${userId}`;
@@ -40,6 +56,7 @@ function emptyCache(): MessagesSessionCache {
     conversations: [],
     messagesByConversation: {},
     activeConversationId: null,
+    filters: DEFAULT_FILTERS,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -72,6 +89,10 @@ export function readMessagesSessionCache(userId: string | null | undefined): Mes
         ])
       ),
       activeConversationId: parsed.activeConversationId ?? null,
+      filters: {
+        ...DEFAULT_FILTERS,
+        ...(parsed.filters ?? {}),
+      },
       updatedAt: parsed.updatedAt ?? new Date().toISOString(),
     };
 
@@ -138,6 +159,26 @@ export function getCachedMessagesForConversation(
   conversationId: string,
 ): Message[] {
   return readMessagesSessionCache(userId)?.messagesByConversation[conversationId] ?? [];
+}
+
+export function getMessagesWorkspaceFilters(
+  userId: string | null | undefined,
+): MessagesWorkspaceFilters {
+  return readMessagesSessionCache(userId)?.filters ?? DEFAULT_FILTERS;
+}
+
+export function saveMessagesWorkspaceFilters(
+  userId: string | null | undefined,
+  filters: Partial<MessagesWorkspaceFilters>,
+) {
+  writeMessagesSessionCache(userId, (current) => ({
+    ...current,
+    filters: {
+      ...current.filters,
+      ...filters,
+    },
+    updatedAt: new Date().toISOString(),
+  }));
 }
 
 export function clearMessagesSessionCache(userId?: string | null) {

@@ -42,6 +42,7 @@ export interface Conversation {
   channel: ChannelType;
   status: ConversationStatus;
   tag?: ConversationTag | null;
+  tags: ConversationTag[];
   is_unread: boolean;
   last_message?: string;
   last_message_date?: string;
@@ -94,6 +95,7 @@ export interface CreateInternalNoteRequest {
 export interface UpdateConversationRequest {
   status?: ConversationStatus;
   tag?: ConversationTag | null;
+  tags?: ConversationTag[];
   is_unread?: boolean;
 }
 

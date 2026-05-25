@@ -283,16 +283,20 @@ async def get_dashboard_stats(
 
     # ── Top tags ──────────────────────────────────────────────────────────────
     from app.models.models import Contact
-    tag_rows = (
-        db.query(Conversation.tag, func.count(Conversation.id))
-        .filter(Conversation.tag.isnot(None))
-        .group_by(Conversation.tag)
-        .order_by(func.count(Conversation.id).desc())
-        .all()
-    )
+    tag_counts: dict[str, int] = {}
+    tag_sources = db.query(Conversation.tags, Conversation.tag).all()
+    for tags_value, legacy_tag in tag_sources:
+        if tags_value:
+            for item in tags_value:
+                normalized = str(item).lower()
+                tag_counts[normalized] = tag_counts.get(normalized, 0) + 1
+        elif legacy_tag:
+            normalized = legacy_tag.value if hasattr(legacy_tag, "value") else str(legacy_tag).lower()
+            tag_counts[normalized] = tag_counts.get(normalized, 0) + 1
+
     top_tags = [
-        {"tag": row[0].value if hasattr(row[0], "value") else str(row[0]), "count": row[1]}
-        for row in tag_rows
+        {"tag": tag, "count": count}
+        for tag, count in sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)
     ]
 
     # ── Peak hours (messages grouped by day-of-week + hour) ───────────────────

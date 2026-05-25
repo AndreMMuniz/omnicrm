@@ -13,11 +13,16 @@ import type {
 } from "@/types/chat";
 
 function normalizeConversation(conversation: Conversation): Conversation {
+  const normalizedTags = (conversation.tags ?? [])
+    .map((tag) => tag?.toUpperCase() as Conversation["tags"][number])
+    .filter(Boolean);
+  const fallbackTag = conversation.tag ? (conversation.tag.toUpperCase() as NonNullable<Conversation["tag"]>) : null;
   return {
     ...conversation,
     channel: conversation.channel?.toUpperCase() as Conversation["channel"],
     status: conversation.status?.toUpperCase() as Conversation["status"],
-    tag: conversation.tag ? (conversation.tag.toUpperCase() as NonNullable<Conversation["tag"]>) : conversation.tag,
+    tag: fallbackTag ?? normalizedTags[0] ?? null,
+    tags: normalizedTags.length > 0 ? normalizedTags : (fallbackTag ? [fallbackTag] : []),
   };
 }
 
@@ -26,6 +31,7 @@ function toBackendConversationUpdate(data: UpdateConversationRequest) {
     ...data,
     status: data.status?.toLowerCase(),
     tag: data.tag?.toLowerCase() ?? data.tag,
+    tags: data.tags?.map((tag) => tag.toLowerCase()),
   };
 }
 

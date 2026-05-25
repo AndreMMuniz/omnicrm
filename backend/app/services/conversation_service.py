@@ -7,9 +7,9 @@ import logging
 from typing import Optional
 from sqlalchemy.orm import Session
 
-from app.models.models import Conversation, ConversationStatus
+from app.models.models import Conversation, ConversationStatus, ConversationTag
 from app.core.websocket import manager
-from app.schemas.chat import serialize_conversation_status
+from app.schemas.chat import normalize_conversation_tags, serialize_conversation_status
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +26,10 @@ def _serialize_assigned_user(conversation: Conversation) -> Optional[dict]:
     }
 
 
+def _serialize_tags(conversation: Conversation) -> list[str]:
+    return normalize_conversation_tags(getattr(conversation, "tags", None))
+
+
 class ConversationService:
     """Manages conversation state changes and real-time notifications."""
 
@@ -34,6 +38,19 @@ class ConversationService:
 
     def update_conversation(self, conversation: Conversation, data: dict) -> Conversation:
         """Apply field updates and persist."""
+        if "tags" in data:
+            normalized_tags = normalize_conversation_tags(data.get("tags"))
+            data["tags"] = normalized_tags
+            data["tag"] = ConversationTag[normalized_tags[0].upper()] if normalized_tags else None
+        elif "tag" in data:
+            normalized_tag = data.get("tag")
+            if normalized_tag is None:
+                data["tags"] = []
+            else:
+                value = normalized_tag.value if hasattr(normalized_tag, "value") else str(normalized_tag).lower()
+                data["tags"] = normalize_conversation_tags([value])
+                data["tag"] = ConversationTag[data["tags"][0].upper()] if data["tags"] else None
+
         for key, value in data.items():
             setattr(conversation, key, value)
         self.db.commit()
@@ -46,6 +63,7 @@ class ConversationService:
             "id": str(conversation.id),
             "status": serialize_conversation_status(conversation.status),
             "tag": conversation.tag.value if conversation.tag else None,
+            "tags": _serialize_tags(conversation),
             "is_unread": conversation.is_unread,
             "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
             "assigned_user": _serialize_assigned_user(conversation),

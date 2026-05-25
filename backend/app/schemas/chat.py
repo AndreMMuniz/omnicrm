@@ -14,6 +14,25 @@ def serialize_conversation_status(status: ConversationStatus | str | None) -> st
         normalized = str(status).lower()
     return "resolved" if normalized == "closed" else normalized
 
+
+def _normalize_conversation_tag_value(value: ConversationTag | str) -> str:
+    if isinstance(value, ConversationTag):
+        return value.value
+    return str(value).lower()
+
+
+def normalize_conversation_tags(value: Optional[List[ConversationTag | str]]) -> List[str]:
+    if not value:
+        return []
+
+    normalized: list[str] = []
+    allowed = {item.value for item in ConversationTag}
+    for item in value:
+        clean = _normalize_conversation_tag_value(item).strip().lower()
+        if clean and clean in allowed and clean not in normalized:
+            normalized.append(clean)
+    return normalized
+
 # --- Contacts ---
 class ContactBase(BaseModel):
     name: Optional[str] = None
@@ -71,11 +90,16 @@ class ConversationBase(BaseModel):
     channel: ChannelType
     status: ConversationStatus
     tag: Optional[ConversationTag] = None
+    tags: List[ConversationTag] = Field(default_factory=list)
     is_unread: bool = False
 
     @field_serializer("status")
     def serialize_status(self, status: ConversationStatus):
         return serialize_conversation_status(status)
+
+    @field_serializer("tags")
+    def serialize_tags(self, tags: List[ConversationTag]):
+        return [_normalize_conversation_tag_value(tag) for tag in tags]
 
 class ConversationCreate(ConversationBase):
     contact_id: UUID
@@ -84,6 +108,7 @@ class ConversationCreate(ConversationBase):
 class ConversationUpdate(BaseModel):
     status: Optional[ConversationStatus] = None
     tag: Optional[ConversationTag] = None
+    tags: Optional[List[ConversationTag]] = None
     is_unread: Optional[bool] = None
     assigned_user_id: Optional[UUID] = None
 
@@ -101,6 +126,15 @@ class ConversationUpdate(BaseModel):
         if isinstance(value, str):
             return value.lower()
         return value
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, str):
+            return [value.lower()]
+        return [_normalize_conversation_tag_value(item) for item in value]
 
 
 class ConversationAssignmentUpdate(BaseModel):

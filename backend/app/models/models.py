@@ -234,6 +234,7 @@ class Conversation(Base):
     channel = Column(Enum(ChannelType), default=ChannelType.WEB)
     status = Column(Enum(ConversationStatus), default=ConversationStatus.OPEN)
     tag = Column(Enum(ConversationTag), nullable=True)
+    tags = Column(JSON, nullable=False, default=list)
 
     is_unread = Column(Boolean, default=False)
     last_message = Column(Text, nullable=True)

@@ -14,6 +14,7 @@ from app.schemas.chat import (
     InternalNoteCreate,
     ConversationUpdate,
     MessageResponse,
+    normalize_conversation_tags,
     serialize_conversation_status,
 )
 from app.schemas.common import create_response, create_paginated_response, create_error_response
@@ -100,6 +101,7 @@ async def get_conversations(
     skip: int = 0,
     limit: int = 100,
     status: Optional[str] = None,
+    tag: Optional[str] = None,
     assigned_user_id: Optional[UUID] = None,
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
@@ -118,6 +120,13 @@ async def get_conversations(
         normalized_status = _normalize_status_filter(status)
         if normalized_status:
             q = q.filter(Conversation.status == normalized_status)
+    if tag:
+        normalized_tag = normalize_conversation_tags([tag])
+        if normalized_tag:
+            q = q.filter(
+                (Conversation.tag == normalized_tag[0]) |
+                (Conversation.tags.contains([normalized_tag[0]]))
+            )
     if assigned_user_id:
         q = q.filter(Conversation.assigned_user_id == assigned_user_id)
 
@@ -402,6 +411,7 @@ async def assign_conversation(
             "id": str(conversation.id),
             "status": serialize_conversation_status(conversation.status),
             "tag": conversation.tag.value if conversation.tag else None,
+            "tags": normalize_conversation_tags(conversation.tags),
             "is_unread": conversation.is_unread,
             "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
             "assigned_user": AssignedUserSlim.model_validate(conversation.assigned_user).model_dump(mode="json")
@@ -536,6 +546,7 @@ async def delete_message(
             "id": str(conversation.id),
             "status": serialize_conversation_status(conversation.status),
             "tag": conversation.tag.value if conversation.tag else None,
+            "tags": normalize_conversation_tags(conversation.tags),
             "is_unread": conversation.is_unread,
         },
     )

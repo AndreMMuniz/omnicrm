@@ -17,12 +17,14 @@ import { useAuth } from '@/hooks/useAuth';
 import { useAISuggestions } from '@/hooks/useAISuggestions';
 import { useQuickReplySearch } from '@/hooks/useQuickReplies';
 import { conversationsApi, quickRepliesApi, projectsApi, clientsApi } from '@/lib/api/index';
+import { getStoredUser } from '@/lib/api';
 import type { ChannelType, Conversation, ConversationStatus, ConversationTag, Message } from '@/types/chat';
 import type { ClientListDto } from '@/types/client';
 import type { ProjectDto, ProjectPriority, ProjectStage, ProjectStageKey, ProjectTaskDto, ProjectTaskStatus } from '@/types/project';
 import AudioMessage from '@/components/AudioMessage';
 import { useState as useLocalState } from 'react';
 import { useMessagesSessionContext } from '@/contexts/MessagesSessionContext';
+import { getMessagesWorkspaceFilters, saveMessagesWorkspaceFilters } from '@/lib/messagesSessionCache';
 
 // ── Assignment Panel (Story 3.5) ──────────────────────────────────────────────
 
@@ -336,13 +338,19 @@ function formatRelativeTime(dateStr: string | undefined): string {
   return new Date(dateStr).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-function TagBadge({ tag, className }: { tag?: ConversationTag | null; className?: string }) {
-  if (!tag) return null;
-  const meta = TAG_META[tag];
+function TagBadge({ tags, className }: { tags?: ConversationTag[]; className?: string }) {
+  if (!tags || tags.length === 0) return null;
   return (
-    <span className={cn('inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold', meta.className, className)}>
-      {meta.label}
-    </span>
+    <>
+      {tags.map((tag) => {
+        const meta = TAG_META[tag];
+        return (
+          <span key={tag} className={cn('inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold', meta.className, className)}>
+            {meta.label}
+          </span>
+        );
+      })}
+    </>
   );
 }
 
@@ -372,18 +380,18 @@ function TagPills({
   value,
   onChange,
 }: {
-  value?: ConversationTag | null;
-  onChange: (value: ConversationTag | null) => void;
+  value?: ConversationTag[];
+  onChange: (value: ConversationTag[]) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {TAG_OPTIONS.map((tag) => {
         const m = TAG_META[tag];
-        const active = value === tag;
+        const active = value?.includes(tag) ?? false;
         return (
           <button
             key={tag}
-            onClick={() => onChange(active ? null : tag)}
+            onClick={() => onChange(active ? (value ?? []).filter((item) => item !== tag) : [...(value ?? []), tag])}
             className="rounded-full px-3 py-1 text-[11px] font-semibold border transition-all cursor-pointer"
             style={active
               ? { background: m.activeBg, color: m.activeText, borderColor: m.activeBorder }
@@ -878,24 +886,24 @@ function CreateTaskFromMessageModal({
 }
 
 function AddTagFromMessageModal({
-  currentTag,
+  currentTags,
   onClose,
   onSelect,
   saving,
 }: {
-  currentTag?: ConversationTag | null;
+  currentTags?: ConversationTag[];
   onClose: () => void;
-  onSelect: (tag: ConversationTag | null) => void;
+  onSelect: (tags: ConversationTag[]) => void;
   saving: boolean;
 }) {
   return (
     <Modal title="Tag Conversation from Message" onClose={onClose} maxWidth="max-w-lg">
       <div className="space-y-5">
         <p className="text-sm leading-6 text-slate-500">
-          This action applies a tag to the whole conversation. Current release supports one tag per conversation.
+          This action applies one or more operational tags to the whole conversation.
         </p>
 
-        <TagPills value={currentTag} onChange={onSelect} />
+        <TagPills value={currentTags} onChange={onSelect} />
 
         <div className="flex items-center justify-end gap-3 border-t border-slate-200 pt-5">
           <button
@@ -908,11 +916,11 @@ function AddTagFromMessageModal({
           </button>
           <button
             type="button"
-            onClick={() => onSelect(null)}
+            onClick={() => onSelect([])}
             disabled={saving}
             className="inline-flex h-11 items-center justify-center rounded-2xl bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700"
           >
-            {saving ? 'Saving...' : currentTag ? 'Remove tag' : 'Close'}
+            {saving ? 'Saving...' : (currentTags?.length ?? 0) > 0 ? 'Clear tags' : 'Close'}
           </button>
         </div>
       </div>
@@ -1033,13 +1041,15 @@ export default function ChatPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuth();
+  const cachedWorkspaceUserId = user?.id ?? getStoredUser<{ id: string }>()?.id ?? null;
+  const cachedFilters = getMessagesWorkspaceFilters(cachedWorkspaceUserId);
   // ── UI-only state ─────────────────────────────────────────────────────────
   const [input, setInput] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedChannel, setSelectedChannel] = useState<'ALL' | ChannelType>('ALL');
-  const [selectedStatus, setSelectedStatus] = useState<'ALL' | ConversationStatus>('ALL');
-  const [selectedTag, setSelectedTag] = useState<'ALL' | ConversationTag>('ALL');
-  const [selectedOwner, setSelectedOwner] = useState<'ALL' | 'UNASSIGNED' | string>('ALL');
+  const [searchQuery, setSearchQuery] = useState(cachedFilters.searchQuery);
+  const [selectedChannel, setSelectedChannel] = useState<'ALL' | ChannelType>(cachedFilters.selectedChannel as 'ALL' | ChannelType);
+  const [selectedStatus, setSelectedStatus] = useState<'ALL' | ConversationStatus>(cachedFilters.selectedStatus as 'ALL' | ConversationStatus);
+  const [selectedTag, setSelectedTag] = useState<'ALL' | ConversationTag>(cachedFilters.selectedTag as 'ALL' | ConversationTag);
+  const [selectedOwner, setSelectedOwner] = useState<'ALL' | 'UNASSIGNED' | string>(cachedFilters.selectedOwner);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -1097,6 +1107,17 @@ export default function ChatPage() {
   useEffect(() => {
     quickRepliesApi.listQuickReplies().then(r => setAllQuickReplies(r.data ?? [])).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!cachedWorkspaceUserId) return;
+    saveMessagesWorkspaceFilters(cachedWorkspaceUserId, {
+      searchQuery,
+      selectedChannel,
+      selectedStatus,
+      selectedTag,
+      selectedOwner,
+    });
+  }, [cachedWorkspaceUserId, searchQuery, selectedChannel, selectedStatus, selectedTag, selectedOwner]);
 
   useEffect(() => {
     conversationsApi.getAssignableUsers()
@@ -1320,7 +1341,7 @@ export default function ChatPage() {
     );
     const matchesChannel = selectedChannel === 'ALL' || c.channel.toUpperCase() === selectedChannel;
     const matchesStatus = selectedStatus === 'ALL' || c.status === selectedStatus;
-    const matchesTag = selectedTag === 'ALL' || c.tag === selectedTag;
+    const matchesTag = selectedTag === 'ALL' || c.tags.includes(selectedTag);
     const matchesOwner = selectedOwner === 'ALL'
       || (selectedOwner === 'UNASSIGNED' ? !c.assigned_user_id : c.assigned_user_id === selectedOwner);
 
@@ -1491,16 +1512,20 @@ export default function ChatPage() {
     }
   }, [activeConversation, availableProjects, createTaskModal, fetchConversations]);
 
-  const handleConversationTagFromMessage = useCallback(async (tag: ConversationTag | null) => {
+  const handleConversationTagFromMessage = useCallback(async (tags: ConversationTag[]) => {
     if (!activeConversation) return;
 
     try {
       setSavingConversationTag(true);
-      await updateConversation(activeConversation.id, { tag });
+      await updateConversation(activeConversation.id, { tags });
       setTagMessageModal(null);
-      setContextActionHint({ message: tag ? `Conversation tagged as ${TAG_META[tag].label}.` : 'Conversation tag removed.' });
+      setContextActionHint({
+        message: tags.length > 0
+          ? `Conversation tagged with ${tags.map((tag) => TAG_META[tag].label).join(', ')}.`
+          : 'Conversation tags cleared.',
+      });
     } catch (error) {
-      setContextActionHint({ message: error instanceof Error ? error.message : 'Failed to update conversation tag.' });
+      setContextActionHint({ message: error instanceof Error ? error.message : 'Failed to update conversation tags.' });
     } finally {
       setSavingConversationTag(false);
     }
@@ -2031,7 +2056,7 @@ export default function ChatPage() {
                     {/* Tag + SLA row */}
                     <div className="flex items-center gap-1 mb-0.5 flex-wrap">
                       <ConversationStatusBadge status={conv.status} />
-                      <TagBadge tag={conv.tag ?? undefined} />
+                      <TagBadge tags={conv.tags} />
                       <ConversationOwnerBadge conversation={conv} />
                       {sla && (
                         <span className="inline-flex items-center gap-[1px] text-[9px] font-bold text-[#ef4444]">
@@ -2114,7 +2139,7 @@ export default function ChatPage() {
                     <h2 className="text-[15px] font-bold text-[#1d1a24]" style={{ letterSpacing: '-0.2px' }}>{activeConversation.contact.name || activeConversation.contact.channel_identifier}</h2>
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                       <ChannelBadge channel={activeConversation.channel} compact />
-                      <TagBadge tag={activeConversation.tag} />
+                      <TagBadge tags={activeConversation.tags} />
                       <ConversationOwnerBadge conversation={activeConversation} />
                       {(() => {
                         const wt = waitingTime(activeConversation.last_message_date, activeConversation.is_unread);
@@ -3076,10 +3101,10 @@ export default function ChatPage() {
                     <div>
                       <p className="text-[10px] font-bold text-[#575f67] uppercase mb-2" style={{ letterSpacing: '0.06em' }}>Conversation Tag</p>
                       <TagPills
-                        value={activeConversation.tag}
-                        onChange={(tag: ConversationTag | null) => updateConversation(activeConversation.id, { tag })}
+                        value={activeConversation.tags}
+                        onChange={(tags: ConversationTag[]) => updateConversation(activeConversation.id, { tags })}
                       />
-                      <p className="mt-1.5 text-[10px] text-slate-400">One tag per conversation in this release.</p>
+                      <p className="mt-1.5 text-[10px] text-slate-400">Use one or more tags to segment operational work.</p>
                     </div>
 
                     <div>
@@ -3232,7 +3257,7 @@ export default function ChatPage() {
 
       {tagMessageModal && (
         <AddTagFromMessageModal
-          currentTag={activeConversation?.tag}
+          currentTags={activeConversation?.tags}
           saving={savingConversationTag}
           onClose={() => setTagMessageModal(null)}
           onSelect={handleConversationTagFromMessage}
