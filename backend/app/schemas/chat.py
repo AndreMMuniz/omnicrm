@@ -18,7 +18,16 @@ def serialize_conversation_status(status: ConversationStatus | str | None) -> st
 def _normalize_conversation_tag_value(value: ConversationTag | str) -> str:
     if isinstance(value, ConversationTag):
         return value.value
-    return str(value).lower()
+
+    raw_value = str(value).strip()
+    if not raw_value:
+        return ""
+
+    upper_value = raw_value.upper()
+    if upper_value in ConversationTag.__members__:
+        return ConversationTag[upper_value].value
+
+    return raw_value.lower()
 
 
 def normalize_conversation_tags(value: Optional[List[ConversationTag | str]]) -> List[str]:
