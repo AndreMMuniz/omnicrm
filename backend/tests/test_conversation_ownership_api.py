@@ -345,3 +345,78 @@ def test_manager_can_change_status_for_other_users_conversation(db, monkeypatch)
 
     assert response.status_code == 200
     assert response.json()["data"]["status"] == "pending"
+
+
+def test_create_internal_note_persists_author_without_changing_preview(db, monkeypatch):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+        last_message="Customer visible message",
+    )
+    db.add(conversation)
+    db.commit()
+
+    notifications = []
+
+    async def fake_notify_new_message(conversation_id, message_data, preview=""):
+        notifications.append((conversation_id, message_data, preview))
+
+    monkeypatch.setattr(manager, "notify_new_message", fake_notify_new_message)
+
+    client = _make_client(db, current_user)
+    response = client.post(
+        f"/api/v1/chat/conversations/{conversation.id}/internal-notes",
+        json={"content": "Need manager follow-up before replying."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["is_internal"] is True
+    assert payload["owner_id"] == str(current_user.id)
+    assert payload["owner"]["full_name"] == "Agent User"
+    assert payload["inbound"] is False
+
+    db.refresh(conversation)
+    assert conversation.last_message == "Customer visible message"
+
+    note = db.query(Message).filter(Message.conversation_id == conversation.id).one()
+    assert note.is_internal is True
+    assert note.owner_id == current_user.id
+
+    assert len(notifications) == 1
+    assert notifications[0][0] == str(conversation.id)
+    assert notifications[0][1]["is_internal"] is True
+    assert notifications[0][1]["owner"]["full_name"] == "Agent User"
+    assert notifications[0][2] == "Internal note added"
+
+
+def test_create_internal_note_respects_ownership_permissions(db):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    owner_user = _seed_user(db, "owner@example.com", "Owner User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=owner_user.id,
+        channel=ChannelType.EMAIL,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.post(
+        f"/api/v1/chat/conversations/{conversation.id}/internal-notes",
+        json={"content": "Private handoff note."},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"]["code"] == "FORBIDDEN"

@@ -73,7 +73,10 @@ class AIService:
         """Build conversation history string from recent messages."""
         messages = (
             self.db.query(Message)
-            .filter(Message.conversation_id == conversation_id)
+            .filter(
+                Message.conversation_id == conversation_id,
+                Message.is_internal == False,
+            )
             .order_by(Message.conversation_sequence.desc())
             .limit(self.CONTEXT_MESSAGES)
             .all()

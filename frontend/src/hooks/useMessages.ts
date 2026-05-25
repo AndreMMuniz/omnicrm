@@ -43,6 +43,7 @@ export interface UseMessagesReturn {
   sendStatus: Record<string, MessageSendStatus>;
   sending: boolean;
   fetchMessages: (conversationId: string) => Promise<void>;
+  createInternalNote: (conversationId: string, content: string) => Promise<void>;
   sendText: (conversationId: string, content: string) => Promise<void>;
   sendFile: (conversationId: string, file: File) => Promise<void>;
   sendAudio: (conversationId: string, blob: Blob) => Promise<void>;
@@ -191,6 +192,24 @@ export function useMessages(scrollToBottom: () => void = () => {}): UseMessagesR
     } finally { setSending(false); }
   }, [sendCore]);
 
+  const createInternalNote = useCallback(async (conversationId: string, content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed) return;
+    try {
+      const note = await conversationsApi.createInternalNote(conversationId, { content: trimmed });
+      setMessages(prev => {
+        if (prev.some(message => message.id === note.id)) return prev;
+        const next = [...prev, note].sort((a, b) => a.conversation_sequence - b.conversation_sequence);
+        saveMessagesToSessionCache(userId, conversationId, next);
+        return next;
+      });
+      scrollToBottom();
+    } catch (err) {
+      console.error("createInternalNote:", err);
+      throw err;
+    }
+  }, [scrollToBottom, userId]);
+
   const sendFile = useCallback(async (conversationId: string, file: File) => {
     const isImage = file.type.startsWith("image/");
     const limit = isImage ? MAX_IMAGE_SIZE : MAX_FILE_SIZE;
@@ -228,5 +247,5 @@ export function useMessages(scrollToBottom: () => void = () => {}): UseMessagesR
     } finally { setSending(false); }
   }, [sendCore]);
 
-  return { messages, sendStatus, sending, fetchMessages, sendText, sendFile, sendAudio, retryMessage, appendMessage };
+  return { messages, sendStatus, sending, fetchMessages, createInternalNote, sendText, sendFile, sendAudio, retryMessage, appendMessage };
 }

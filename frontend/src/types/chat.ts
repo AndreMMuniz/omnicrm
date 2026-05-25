@@ -60,11 +60,13 @@ export interface Message {
   content: string;
   inbound: boolean;
   message_type: MessageType;
+  is_internal?: boolean;
   /** Auto-incremented per conversation — guarantees display order */
   conversation_sequence: number;
   image?: string;
   file?: string;
   owner_id?: string;
+  owner?: AssignedUser;
   created_at: string;
   /** Delivery tracking (Story 4.1) — only set for outbound messages */
   delivery_status?: DeliveryStatus;
@@ -82,6 +84,10 @@ export interface SendMessageRequest {
   image?: string;
   file?: string;
   idempotency_key?: string;
+}
+
+export interface CreateInternalNoteRequest {
+  content: string;
 }
 
 /** PATCH /chat/conversations/{id} request */

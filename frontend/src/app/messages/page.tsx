@@ -1088,6 +1088,8 @@ export default function ChatPage() {
   const [creatingQuickReply, setCreatingQuickReply] = useState(false);
   const [deleteMessageModal, setDeleteMessageModal] = useState<DeleteMessageState | null>(null);
   const [deletingMessage, setDeletingMessage] = useState(false);
+  const [savingInternalNote, setSavingInternalNote] = useState(false);
+  const [internalNoteDraft, setInternalNoteDraft] = useState('');
   const [handledQueryConversationId, setHandledQueryConversationId] = useState<string | null>(null);
   const [showConnectionBanner, setShowConnectionBanner] = useState(false);
   const [assignableUsers, setAssignableUsers] = useState<{ id: string; full_name: string }[]>([]);
@@ -1188,6 +1190,7 @@ export default function ChatPage() {
       sendStatus,
       sending,
       fetchMessages,
+      createInternalNote,
       sendText,
       sendFile,
       sendAudio,
@@ -1664,6 +1667,7 @@ export default function ChatPage() {
     cancelAttachment();
     clearAI();
     lastAIFetchedKeyRef.current = null;
+    setInternalNoteDraft('');
     await activateConversation(conv);
     setMobileView('chat');
   }, [activateConversation, clearAI]);
@@ -1758,7 +1762,21 @@ export default function ChatPage() {
     }
   };
 
-  const loading = sending;
+  const handleCreateInternalNote = useCallback(async () => {
+    if (!activeConversation || !internalNoteDraft.trim()) return;
+    try {
+      setSavingInternalNote(true);
+      await createInternalNote(activeConversation.id, internalNoteDraft);
+      setInternalNoteDraft('');
+      setContextActionHint({ message: 'Internal note added to the conversation.' });
+    } catch (error) {
+      setContextActionHint({ message: error instanceof Error ? error.message : 'Failed to create internal note.' });
+    } finally {
+      setSavingInternalNote(false);
+    }
+  }, [activeConversation, createInternalNote, internalNoteDraft]);
+
+  const loading = sending || savingInternalNote;
   const effectiveMobileView = activeConversation ? mobileView : 'list';
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -2188,12 +2206,18 @@ export default function ChatPage() {
                     const primaryLinkedProject = linkedProjects[0];
                     const linkedTasks = linkedTasksByMessageId[msg.id] ?? [];
                     const primaryLinkedTask = linkedTasks[0];
+                    const isInternalNote = Boolean(msg.is_internal);
+                    const authorLabel = isInternalNote
+                      ? (msg.owner?.full_name || 'Internal note')
+                      : msg.inbound
+                        ? (activeConversation.contact.name || 'User').split(' ')[0]
+                        : 'You';
                     return (
-                  <div key={msg.id} className={cn("group/message relative flex max-w-[72%]", !msg.inbound ? "self-end" : "self-start")}>
-                    <div className={cn("relative flex flex-col gap-1", !msg.inbound ? "items-end" : "items-start")}>
-                      <div className={cn("flex items-baseline gap-2", !msg.inbound ? "flex-row-reverse" : "")}>
+                  <div key={msg.id} className={cn("group/message relative flex max-w-[72%]", isInternalNote ? "self-start max-w-[82%]" : !msg.inbound ? "self-end" : "self-start")}>
+                    <div className={cn("relative flex flex-col gap-1", isInternalNote ? "items-start" : !msg.inbound ? "items-end" : "items-start")}>
+                      <div className={cn("flex items-baseline gap-2", isInternalNote ? "" : !msg.inbound ? "flex-row-reverse" : "")}>
                         <span className="text-[11px] font-semibold text-[#374151]">
-                          {msg.inbound ? (activeConversation.contact.name || 'User').split(' ')[0] : 'You'}
+                          {authorLabel}
                         </span>
                         <span className="text-[10px] text-[#94a3b8]">
                           {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -2237,12 +2261,20 @@ export default function ChatPage() {
 
                       <div className={cn(
                         "px-3.5 py-2.5 text-[14px] leading-[1.5] shadow-sm",
-                        !msg.inbound
+                        isInternalNote
+                          ? "border border-amber-200 bg-amber-50 text-amber-900"
+                          : !msg.inbound
                           ? "bg-[#4f46e5] text-white"
                           : "bg-white border border-[#E9ECEF] text-[#1d1a24]",
                         sendStatus[msg.id] === 'failed' && "opacity-60 border-red-300"
                       )}
-                      style={{ borderRadius: msg.inbound ? '4px 14px 14px 14px' : '14px 4px 14px 14px' }}>
+                      style={{ borderRadius: isInternalNote ? '12px' : msg.inbound ? '4px 14px 14px 14px' : '14px 4px 14px 14px' }}>
+                        {isInternalNote && (
+                          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700">
+                            <span className="material-symbols-outlined text-[13px]">sticky_note_2</span>
+                            Internal note
+                          </div>
+                        )}
                         <p>{msg.content}</p>
                         {msg.image && <img src={msg.image} alt="Attachment" className="mt-2 rounded-lg max-w-xs cursor-zoom-in" />}
                         {msg.message_type === 'audio' && msg.file && (
@@ -2256,7 +2288,7 @@ export default function ChatPage() {
                           </a>
                         )}
                         {/* Send failure indicator + retry — Stories 4.2 + 4.3 */}
-                        {(sendStatus[msg.id] === 'failed' || msg.delivery_status === 'failed') && (
+                        {!isInternalNote && (sendStatus[msg.id] === 'failed' || msg.delivery_status === 'failed') && (
                           <div className="mt-1.5 flex items-center gap-2 text-red-500 text-xs">
                             <span className="material-symbols-outlined text-[14px]">error</span>
                             <span title={msg.delivery_error || 'Unknown error'}>
@@ -2282,7 +2314,7 @@ export default function ChatPage() {
                           </div>
                         )}
                       </div>
-                      {!msg.inbound && sendStatus[msg.id] !== 'failed' && msg.delivery_status !== 'failed' && (
+                      {!isInternalNote && !msg.inbound && sendStatus[msg.id] !== 'failed' && msg.delivery_status !== 'failed' && (
                         <div className="flex items-center gap-[3px]">
                           <span className="material-symbols-outlined text-[12px]"
                             style={{ fontVariationSettings: "'FILL' 1", color: msg.delivery_status === 'delivered' ? '#7C4DFF' : '#94a3b8' }}>
@@ -3048,6 +3080,30 @@ export default function ChatPage() {
                         onChange={(tag: ConversationTag | null) => updateConversation(activeConversation.id, { tag })}
                       />
                       <p className="mt-1.5 text-[10px] text-slate-400">One tag per conversation in this release.</p>
+                    </div>
+
+                    <div>
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="material-symbols-outlined text-[14px] text-amber-600">sticky_note_2</span>
+                        <p className="text-[10px] font-bold text-[#575f67] uppercase" style={{ letterSpacing: '0.06em' }}>Internal Note</p>
+                      </div>
+                      <textarea
+                        value={internalNoteDraft}
+                        onChange={(event) => setInternalNoteDraft(event.target.value)}
+                        placeholder="Add handoff context or an internal observation. This note is never sent to the customer."
+                        className="min-h-[96px] w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] text-slate-700 outline-none transition focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+                      />
+                      <div className="mt-2 flex items-center justify-between gap-3">
+                        <p className="text-[10px] text-slate-400">Visible only to internal operators in this conversation.</p>
+                        <button
+                          type="button"
+                          onClick={handleCreateInternalNote}
+                          disabled={!internalNoteDraft.trim() || savingInternalNote}
+                          className="inline-flex h-9 items-center justify-center rounded-xl bg-amber-600 px-3 text-[11px] font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-300"
+                        >
+                          {savingInternalNote ? 'Saving...' : 'Add Note'}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}

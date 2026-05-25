@@ -11,6 +11,7 @@ from app.schemas.chat import (
     AssignedUserSlim,
     ConversationAssignmentUpdate,
     ConversationResponse,
+    InternalNoteCreate,
     ConversationUpdate,
     MessageResponse,
     serialize_conversation_status,
@@ -148,8 +149,17 @@ async def list_assignable_users(
 
 @router.get("/conversations/{conversation_id}/messages")
 @limiter.limit("60/minute")
-async def get_conversation_messages(request: Request, conversation_id: UUID, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def get_conversation_messages(
+    request: Request,
+    conversation_id: UUID,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
     """Get all messages for a specific conversation."""
+    from sqlalchemy.orm import joinedload
+
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
@@ -159,7 +169,15 @@ async def get_conversation_messages(request: Request, conversation_id: UUID, ski
         )
         raise HTTPException(status_code=status, detail=error_response)
 
-    messages = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.conversation_sequence.asc()).offset(skip).limit(limit).all()
+    messages = (
+        db.query(Message)
+        .options(joinedload(Message.owner))
+        .filter(Message.conversation_id == conversation_id)
+        .order_by(Message.conversation_sequence.asc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     total = db.query(Message).filter(Message.conversation_id == conversation_id).count()
     return create_paginated_response(
         data=[MessageResponse.model_validate(m) for m in messages],
@@ -271,6 +289,55 @@ async def send_message(
     )
 
     return create_response(MessageResponse.model_validate(new_message))
+
+
+@router.post("/conversations/{conversation_id}/internal-notes")
+@limiter.limit("60/minute")
+async def create_internal_note(
+    request: Request,
+    conversation_id: UUID,
+    note_data: InternalNoteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Persist an internal note on a conversation without sending anything to external channels."""
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if not conversation:
+        error_response, status = create_error_response(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+            status_code=404,
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+    if not _can_operate_conversation(current_user, conversation):
+        error_response, status = create_error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to add notes to this conversation",
+            details={
+                "conversation_id": str(conversation_id),
+                "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
+            },
+            status_code=403,
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+    note_content = note_data.content.strip()
+    if not note_content:
+        error_response, status = create_error_response(
+            code="VALIDATION_ERROR",
+            message="Internal note content cannot be empty",
+            status_code=422,
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+    svc = MessageService(db)
+    note = await svc.create_internal_note(
+        conversation=conversation,
+        content=note_content,
+        owner_id=current_user.id,
+    )
+    return create_response(MessageResponse.model_validate(note))
 
 
 # ── Conversation Assignment (Story 3.5) ──────────────────────────────────────

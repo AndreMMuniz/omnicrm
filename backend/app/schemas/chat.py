@@ -27,6 +27,14 @@ class ContactResponse(ContactBase):
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
+
+class AssignedUserSlim(BaseModel):
+    id: UUID
+    full_name: str
+    email: str
+    avatar: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
 # --- Messages ---
 class MessageBase(BaseModel):
     content: str
@@ -34,6 +42,7 @@ class MessageBase(BaseModel):
     message_type: MessageType
     image: Optional[str] = None
     file: Optional[str] = None
+    is_internal: bool = False
 
 class MessageCreate(MessageBase):
     conversation_id: UUID
@@ -41,10 +50,15 @@ class MessageCreate(MessageBase):
     inbound: bool = False
     idempotency_key: Optional[str] = None
 
+
+class InternalNoteCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=5000)
+
 class MessageResponse(MessageBase):
     id: UUID
     conversation_id: UUID
     owner_id: Optional[UUID] = None
+    owner: Optional[AssignedUserSlim] = None
     conversation_sequence: int = 0
     delivery_status: Optional[DeliveryStatus] = None
     delivery_error: Optional[str] = None
@@ -91,13 +105,6 @@ class ConversationUpdate(BaseModel):
 
 class ConversationAssignmentUpdate(BaseModel):
     assigned_user_id: Optional[UUID] = None
-
-class AssignedUserSlim(BaseModel):
-    id: UUID
-    full_name: str
-    email: str
-    avatar: Optional[str] = None
-    model_config = ConfigDict(from_attributes=True)
 
 
 class ConversationResponse(ConversationBase):

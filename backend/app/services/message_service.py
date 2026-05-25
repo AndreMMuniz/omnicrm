@@ -36,11 +36,14 @@ class MessageService:
         image: Optional[str] = None,
         file: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        is_internal: bool = False,
+        update_last_message: bool = True,
     ) -> Message:
         return self._creation.create_message(
             conversation=conversation, content=content, inbound=inbound,
             owner_id=owner_id, message_type=message_type, image=image,
             file=file, idempotency_key=idempotency_key,
+            is_internal=is_internal, update_last_message=update_last_message,
         )
 
     async def dispatch_to_channel(
@@ -122,6 +125,25 @@ class MessageService:
         )
         await self._broadcast.broadcast_new_message(message)
         await self._enqueue_for_agent(message, conversation, agent_content=agent_content)
+        return message
+
+    async def create_internal_note(
+        self,
+        conversation: Conversation,
+        content: str,
+        owner_id: UUID,
+    ) -> Message:
+        message = self._creation.create_message(
+            conversation=conversation,
+            content=content,
+            inbound=False,
+            owner_id=owner_id,
+            message_type="TEXT",
+            is_internal=True,
+            update_last_message=False,
+        )
+        self.db.refresh(message, attribute_names=["owner"])
+        await self._broadcast.broadcast_new_message(message)
         return message
 
     async def _enqueue_for_agent(

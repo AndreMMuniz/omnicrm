@@ -4,11 +4,10 @@ Unit tests for MessageService — sequencing, idempotency, dispatch routing.
 
 import pytest
 from unittest.mock import AsyncMock, patch
-from uuid import uuid4
 
 from app.services.message_service import MessageService
 from app.models.models import (
-    User, UserType, DefaultRole, Contact, Conversation, Message, ChannelType
+    Contact, Conversation, Message, ChannelType
 )
 
 
@@ -149,6 +148,7 @@ class TestSendFromDashboard:
             msg = await MessageService(db).receive_from_channel(conv, "Customer says hi")
 
         assert msg.inbound is True
+
 
 # ── retry_message ─────────────────────────────────────────────────────────────
 

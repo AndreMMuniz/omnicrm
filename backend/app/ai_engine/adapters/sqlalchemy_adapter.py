@@ -23,7 +23,10 @@ class SQLAlchemyLeadAdapter:
     def get_conversation_messages(self, conversation_id: str) -> list[ConversationMessage]:
         rows = (
             self._db.query(Message)
-            .filter(Message.conversation_id == conversation_id)
+            .filter(
+                Message.conversation_id == conversation_id,
+                Message.is_internal == False,
+            )
             .order_by(Message.created_at.asc())
             .all()
         )

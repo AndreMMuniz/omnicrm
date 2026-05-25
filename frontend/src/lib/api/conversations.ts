@@ -6,6 +6,7 @@ import type {
   AssignedUser,
   ClientMatch,
   Conversation,
+  CreateInternalNoteRequest,
   Message,
   SendMessageRequest,
   UpdateConversationRequest,
@@ -63,6 +64,17 @@ export async function sendMessage(
     `/chat/conversations/${conversationId}/messages`,
     "POST",
     { conversation_id: conversationId, ...payload }
+  );
+}
+
+export async function createInternalNote(
+  conversationId: string,
+  payload: CreateInternalNoteRequest
+): Promise<Message> {
+  return apiMutate<CreateInternalNoteRequest, Message>(
+    `/chat/conversations/${conversationId}/internal-notes`,
+    "POST",
+    payload
   );
 }
 

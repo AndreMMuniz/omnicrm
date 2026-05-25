@@ -268,6 +268,7 @@ class Message(Base):
     content = Column(Text, nullable=False)
     inbound = Column(Boolean, default=True) # True if from Contact, False if from us (Agent/Bot)
     message_type = Column(Enum(MessageType), default=MessageType.TEXT)
+    is_internal = Column(Boolean, nullable=False, default=False)
 
     image = Column(String, nullable=True) # URL to image
     file = Column(String, nullable=True) # URL to file

@@ -31,6 +31,8 @@ class MessageCreationService:
         image: Optional[str] = None,
         file: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        is_internal: bool = False,
+        update_last_message: bool = True,
     ) -> Message:
         """
         Create and persist a message with an auto-incremented sequence number.
@@ -51,13 +53,15 @@ class MessageCreationService:
             inbound=inbound,
             owner_id=owner_id,
             message_type=msg_type_enum,
+            is_internal=is_internal,
             image=image,
             file=file,
             conversation_sequence=sequence,
             idempotency_key=idempotency_key,
         )
         self.db.add(message)
-        conversation.last_message = content
+        if update_last_message:
+            conversation.last_message = content
         conversation.is_unread = inbound
         self.db.commit()
         self.db.refresh(message)
