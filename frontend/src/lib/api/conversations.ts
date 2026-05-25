@@ -30,11 +30,14 @@ function toBackendConversationUpdate(data: UpdateConversationRequest) {
 
 export async function getConversations(
   limit = 100,
-  params?: { assigned_user_id?: string | null }
+  params?: { assigned_user_id?: string | null; status?: string | null }
 ): Promise<ApiResponse<Conversation[]>> {
   const query = new URLSearchParams({ limit: String(limit) });
   if (params?.assigned_user_id) {
     query.set("assigned_user_id", params.assigned_user_id);
+  }
+  if (params?.status) {
+    query.set("status", params.status);
   }
   const response = await apiGetList<Conversation>(`/chat/conversations?${query.toString()}`);
   return {

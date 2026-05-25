@@ -1,7 +1,7 @@
 /** Chat domain types — mirrors backend models/models.py + schemas/chat.py */
 
 export type ChannelType = "TELEGRAM" | "WHATSAPP" | "EMAIL" | "SMS" | "WEB";
-export type ConversationStatus = "OPEN" | "CLOSED" | "PENDING";
+export type ConversationStatus = "OPEN" | "PENDING" | "RESOLVED";
 export type ConversationTag = "SUPPORT" | "BILLING" | "FEEDBACK" | "SALES" | "GENERAL" | "SPAM";
 export type MessageType = "text" | "image" | "file" | "audio";
 export type DeliveryStatus = "pending" | "sent" | "delivered" | "failed";

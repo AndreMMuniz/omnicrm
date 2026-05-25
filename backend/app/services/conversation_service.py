@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.models import Conversation, ConversationStatus
 from app.core.websocket import manager
+from app.schemas.chat import serialize_conversation_status
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class ConversationService:
         """Notify all clients about a conversation state change."""
         await manager.broadcast_global("conversation_updated", {
             "id": str(conversation.id),
-            "status": conversation.status.value if conversation.status else None,
+            "status": serialize_conversation_status(conversation.status),
             "tag": conversation.tag.value if conversation.tag else None,
             "is_unread": conversation.is_unread,
             "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
@@ -85,7 +86,7 @@ def _is_closing(conversation: Conversation, data: dict) -> bool:
         return False
     if isinstance(new_status, ConversationStatus):
         return new_status == ConversationStatus.CLOSED
-    return str(new_status).lower() == "closed"
+    return str(new_status).lower() in {"closed", "resolved"}
 
 
 async def _run_lead_detection(conversation_id: str, channel: str) -> None:

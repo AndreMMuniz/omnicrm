@@ -1,8 +1,18 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 from typing import List, Optional
 from datetime import datetime
 from uuid import UUID
 from app.models.models import ChannelType, ConversationStatus, ConversationTag, MessageType, DeliveryStatus
+
+
+def serialize_conversation_status(status: ConversationStatus | str | None) -> str | None:
+    if status is None:
+        return None
+    if isinstance(status, ConversationStatus):
+        normalized = status.value
+    else:
+        normalized = str(status).lower()
+    return "resolved" if normalized == "closed" else normalized
 
 # --- Contacts ---
 class ContactBase(BaseModel):
@@ -49,6 +59,10 @@ class ConversationBase(BaseModel):
     tag: Optional[ConversationTag] = None
     is_unread: bool = False
 
+    @field_serializer("status")
+    def serialize_status(self, status: ConversationStatus):
+        return serialize_conversation_status(status)
+
 class ConversationCreate(ConversationBase):
     contact_id: UUID
     thread_id: Optional[str] = None
@@ -63,7 +77,8 @@ class ConversationUpdate(BaseModel):
     @classmethod
     def normalize_status(cls, value):
         if isinstance(value, str):
-            return value.lower()
+            normalized = value.lower()
+            return "closed" if normalized == "resolved" else normalized
         return value
 
     @field_validator("tag", mode="before")

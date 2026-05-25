@@ -17,7 +17,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useAISuggestions } from '@/hooks/useAISuggestions';
 import { useQuickReplySearch } from '@/hooks/useQuickReplies';
 import { conversationsApi, quickRepliesApi, projectsApi, clientsApi } from '@/lib/api/index';
-import type { ChannelType, Conversation, ConversationTag, Message } from '@/types/chat';
+import type { ChannelType, Conversation, ConversationStatus, ConversationTag, Message } from '@/types/chat';
 import type { ClientListDto } from '@/types/client';
 import type { ProjectDto, ProjectPriority, ProjectStage, ProjectStageKey, ProjectTaskDto, ProjectTaskStatus } from '@/types/project';
 import AudioMessage from '@/components/AudioMessage';
@@ -132,6 +132,50 @@ function InboxOwnerSelect({
   );
 }
 
+function InboxStatusSelect({
+  conversation,
+  onChange,
+}: {
+  conversation: Conversation;
+  onChange: (status: ConversationStatus) => Promise<void>;
+}) {
+  const [saving, setSaving] = useLocalState(false);
+
+  const handleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    e.stopPropagation();
+    setSaving(true);
+    await onChange(e.target.value as ConversationStatus).catch(() => {});
+    setSaving(false);
+  };
+
+  return (
+    <div
+      className="flex items-center gap-1.5"
+      onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <select
+        value={conversation.status}
+        onChange={handleChange}
+        disabled={saving}
+        className={cn(
+          "h-7 rounded-full border px-2 text-[10px] font-semibold outline-none transition",
+          getConversationStatusMeta(conversation.status).selectClassName
+        )}
+      >
+        {STATUS_OPTIONS.map((status) => (
+          <option key={status} value={status}>
+            {getConversationStatusMeta(status).label}
+          </option>
+        ))}
+      </select>
+      {saving ? (
+        <span className="material-symbols-outlined text-[13px] text-slate-400 animate-spin">progress_activity</span>
+      ) : null}
+    </div>
+  );
+}
+
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -154,6 +198,7 @@ function avatarColor(name: string) {
 }
 
 const SLA_THRESHOLD_MINUTES = 60;
+const STATUS_OPTIONS: ConversationStatus[] = ['OPEN', 'PENDING', 'RESOLVED'];
 const TAG_OPTIONS: ConversationTag[] = ['SUPPORT', 'BILLING', 'FEEDBACK', 'SALES', 'GENERAL', 'SPAM'];
 
 const CHANNEL_META: Record<ChannelType, {
@@ -211,6 +256,59 @@ const TAG_META: Record<ConversationTag, { label: string; className: string; acti
   GENERAL:  { label: 'General',  className: 'bg-slate-100 text-slate-700 border-slate-200',   activeBg: '#f8fafc', activeText: '#475569', activeBorder: '#e2e8f0' },
   SPAM:     { label: 'Spam',     className: 'bg-rose-50 text-rose-700 border-rose-100',       activeBg: '#fff1f2', activeText: '#be123c', activeBorder: '#fecdd3' },
 };
+
+const STATUS_META: Record<ConversationStatus, {
+  label: string;
+  shortLabel: string;
+  badgeClassName: string;
+  textClassName: string;
+  buttonActiveClassName: string;
+  selectClassName: string;
+}> = {
+  OPEN: {
+    label: 'Open',
+    shortLabel: 'Open',
+    badgeClassName: 'border-violet-200 bg-violet-50 text-violet-700',
+    textClassName: 'text-violet-700',
+    buttonActiveClassName: 'bg-[#fdf4ff] text-[#7C4DFF] border-[#e9d5ff]',
+    selectClassName: 'border-violet-200 bg-violet-50 text-violet-700 focus:border-violet-300',
+  },
+  PENDING: {
+    label: 'Pending',
+    shortLabel: 'Pending',
+    badgeClassName: 'border-amber-200 bg-amber-50 text-amber-700',
+    textClassName: 'text-amber-700',
+    buttonActiveClassName: 'bg-[#fffbeb] text-[#92400e] border-[#fde68a]',
+    selectClassName: 'border-amber-200 bg-amber-50 text-amber-700 focus:border-amber-300',
+  },
+  RESOLVED: {
+    label: 'Resolved',
+    shortLabel: 'Resolved',
+    badgeClassName: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    textClassName: 'text-emerald-700',
+    buttonActiveClassName: 'bg-[#f0fdf4] text-[#15803d] border-[#bbf7d0]',
+    selectClassName: 'border-emerald-200 bg-emerald-50 text-emerald-700 focus:border-emerald-300',
+  },
+};
+
+function getConversationStatusMeta(status: ConversationStatus | null | undefined) {
+  return STATUS_META[status ?? 'OPEN'];
+}
+
+function ConversationStatusBadge({
+  status,
+  className,
+}: {
+  status: ConversationStatus;
+  className?: string;
+}) {
+  const meta = getConversationStatusMeta(status);
+  return (
+    <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold", meta.badgeClassName, className)}>
+      {status === 'RESOLVED' ? '✓ ' : ''}{meta.shortLabel}
+    </span>
+  );
+}
 
 function waitingTime(lastMessageDate: string | undefined, isUnread: boolean): { label: string; color: string; slaBreached: boolean } | null {
   if (!isUnread || !lastMessageDate) return null;
@@ -939,6 +1037,7 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedChannel, setSelectedChannel] = useState<'ALL' | ChannelType>('ALL');
+  const [selectedStatus, setSelectedStatus] = useState<'ALL' | ConversationStatus>('ALL');
   const [selectedTag, setSelectedTag] = useState<'ALL' | ConversationTag>('ALL');
   const [selectedOwner, setSelectedOwner] = useState<'ALL' | 'UNASSIGNED' | string>('ALL');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -1191,14 +1290,17 @@ export default function ChatPage() {
   ]);
 
   const availableChannels = Object.keys(CHANNEL_META) as ChannelType[];
-  const hasActiveFilters = Boolean(searchQuery.trim()) || selectedChannel !== 'ALL' || selectedTag !== 'ALL' || selectedOwner !== 'ALL';
+  const hasActiveFilters = Boolean(searchQuery.trim()) || selectedChannel !== 'ALL' || selectedStatus !== 'ALL' || selectedTag !== 'ALL' || selectedOwner !== 'ALL';
   const selectedTagLabel = selectedTag === 'ALL' ? null : TAG_META[selectedTag].label;
+  const selectedStatusLabel = selectedStatus === 'ALL' ? null : getConversationStatusMeta(selectedStatus).label.toLowerCase();
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const canUseAISuggestions = Boolean(activeConversation && lastMessage?.inbound);
   const emptyStateMessage = !hasActiveFilters
     ? 'No conversations yet'
     : selectedTag !== 'ALL'
       ? `No conversations match the ${selectedTagLabel} tag with the current filters`
+      : selectedStatus !== 'ALL'
+        ? `No conversations match the ${selectedStatusLabel} status with the current filters`
       : selectedChannel !== 'ALL'
         ? `No conversations match the ${getChannelMeta(selectedChannel).label} channel with the current filters`
         : selectedOwner === 'UNASSIGNED'
@@ -1214,11 +1316,12 @@ export default function ChatPage() {
       c.contact.channel_identifier?.toLowerCase().includes(q)
     );
     const matchesChannel = selectedChannel === 'ALL' || c.channel.toUpperCase() === selectedChannel;
+    const matchesStatus = selectedStatus === 'ALL' || c.status === selectedStatus;
     const matchesTag = selectedTag === 'ALL' || c.tag === selectedTag;
     const matchesOwner = selectedOwner === 'ALL'
       || (selectedOwner === 'UNASSIGNED' ? !c.assigned_user_id : c.assigned_user_id === selectedOwner);
 
-    return matchesSearch && matchesChannel && matchesTag && matchesOwner;
+    return matchesSearch && matchesChannel && matchesStatus && matchesTag && matchesOwner;
   });
 
   const assignConversationOwner = useCallback(async (conversationId: string, userId: string | null) => {
@@ -1774,6 +1877,23 @@ export default function ChatPage() {
               {/* Tag filter dropdown */}
               <div className="relative">
                 <select
+                  value={selectedStatus}
+                  onChange={(event) => setSelectedStatus(event.target.value as ConversationStatus | 'ALL')}
+                  className="h-8 w-full appearance-none rounded-full border border-emerald-200 bg-emerald-50 px-3 pr-8 text-[11px] font-semibold text-emerald-700 outline-none transition-colors"
+                >
+                  <option value="ALL">All statuses</option>
+                  {STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {getConversationStatusMeta(status).label}
+                    </option>
+                  ))}
+                </select>
+                <span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[16px] text-emerald-700">
+                  expand_more
+                </span>
+              </div>
+              <div className="relative">
+                <select
                   value={selectedTag}
                   onChange={(event) => setSelectedTag(event.target.value as ConversationTag | 'ALL')}
                   className="h-8 w-full appearance-none rounded-full border border-[#c7d2fe] bg-[#eef2ff] px-3 pr-8 text-[11px] font-semibold text-[#4338ca] outline-none transition-colors"
@@ -1820,6 +1940,7 @@ export default function ChatPage() {
                     onClick={() => {
                       setSearchQuery('');
                       setSelectedChannel('ALL');
+                      setSelectedStatus('ALL');
                       setSelectedTag('ALL');
                       setSelectedOwner('ALL');
                     }}
@@ -1891,6 +2012,7 @@ export default function ChatPage() {
                     </div>
                     {/* Tag + SLA row */}
                     <div className="flex items-center gap-1 mb-0.5 flex-wrap">
+                      <ConversationStatusBadge status={conv.status} />
                       <TagBadge tag={conv.tag ?? undefined} />
                       <ConversationOwnerBadge conversation={conv} />
                       {sla && (
@@ -1905,11 +2027,17 @@ export default function ChatPage() {
                         style={{ color: conv.is_unread ? '#374151' : '#94a3b8', fontWeight: conv.is_unread ? 500 : 400 }}>
                         {conv.last_message || 'No messages'}
                       </p>
-                      <InboxOwnerSelect
-                        conversation={conv}
-                        agents={assignableUsers}
-                        onAssign={(userId) => assignConversationOwner(conv.id, userId)}
-                      />
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <InboxStatusSelect
+                          conversation={conv}
+                          onChange={(status) => updateConversation(conv.id, { status })}
+                        />
+                        <InboxOwnerSelect
+                          conversation={conv}
+                          agents={assignableUsers}
+                          onAssign={(userId) => assignConversationOwner(conv.id, userId)}
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2881,12 +3009,8 @@ export default function ChatPage() {
                     <div>
                       <p className="text-[10px] font-bold text-[#575f67] uppercase mb-2" style={{ letterSpacing: '0.06em' }}>Status</p>
                       <div className="flex gap-1.5">
-                        {(['OPEN', 'PENDING', 'CLOSED'] as const).map(s => {
-                          const styles = {
-                            OPEN:    { active: 'bg-[#fdf4ff] text-[#7C4DFF] border-[#e9d5ff]',          label: 'Open' },
-                            PENDING: { active: 'bg-[#fffbeb] text-[#92400e] border-[#fde68a]',           label: 'Pending' },
-                            CLOSED:  { active: 'bg-[#f0fdf4] text-[#15803d] border-[#bbf7d0]',          label: 'Closed' },
-                          };
+                        {STATUS_OPTIONS.map((s) => {
+                          const meta = getConversationStatusMeta(s);
                           const isActive = activeConversation.status === s;
                           return (
                             <button
@@ -2894,10 +3018,10 @@ export default function ChatPage() {
                               onClick={() => updateConversation(activeConversation.id, { status: s })}
                               className={cn(
                                 "flex-1 py-[5px] rounded-[7px] border text-[11px] font-semibold transition-all",
-                                isActive ? styles[s].active : "bg-white text-[#575f67] border-[#e2e8f0] hover:border-slate-300"
+                                isActive ? meta.buttonActiveClassName : "bg-white text-[#575f67] border-[#e2e8f0] hover:border-slate-300"
                               )}
                             >
-                              {styles[s].label}
+                              {meta.label}
                             </button>
                           );
                         })}
@@ -2958,9 +3082,7 @@ export default function ChatPage() {
                                     </span>
                                   </div>
                                   <p className="text-xs text-slate-600 truncate">{c.last_message || 'No messages'}</p>
-                                  <span className={cn("text-[10px] font-semibold", c.status === 'CLOSED' ? "text-emerald-600" : "text-slate-400")}>
-                                    {c.status === 'CLOSED' ? '✓ Resolved' : c.status === 'OPEN' ? 'Open' : 'Pending'}
-                                  </span>
+                                  <ConversationStatusBadge status={c.status} className="w-fit" />
                                 </button>
                               ))}
                             </div>
@@ -2995,9 +3117,7 @@ export default function ChatPage() {
                         <div className="flex flex-col divide-y divide-slate-100">
                           {clientHistory.map(c => {
                             const ch = (c.channel?.toUpperCase() ?? 'WEB') as ChannelType;
-                            const statusLabel = c.status?.toUpperCase() === 'CLOSED' ? '✓ Resolved'
-                              : c.status?.toUpperCase() === 'OPEN' ? 'Open' : 'Pending';
-                            const isClosed = c.status?.toUpperCase() === 'CLOSED';
+                            const status = (c.status?.toUpperCase() ?? 'OPEN') as ConversationStatus;
                             return (
                               <div key={c.id} className="flex flex-col gap-1.5 py-2.5 px-1">
                                 <div className="flex items-center justify-between">
@@ -3010,9 +3130,7 @@ export default function ChatPage() {
                                   <p className="text-[10px] text-slate-400 truncate">{c.contact_name} · {c.channel_identifier}</p>
                                 )}
                                 <p className="text-xs text-slate-600 truncate">{c.last_message || 'No messages'}</p>
-                                <span className={cn("text-[10px] font-semibold", isClosed ? "text-emerald-600" : "text-slate-400")}>
-                                  {statusLabel}
-                                </span>
+                                <ConversationStatusBadge status={status} className="w-fit" />
                               </div>
                             );
                           })}

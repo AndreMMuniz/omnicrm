@@ -13,12 +13,32 @@ from app.schemas.chat import (
     ConversationResponse,
     ConversationUpdate,
     MessageResponse,
+    serialize_conversation_status,
 )
 from app.schemas.common import create_response, create_paginated_response, create_error_response
 from app.core.websocket import manager  # still used by WebSocket endpoint
 from app.core.auth import get_current_user, require_permission, get_client_ip
+from app.models.models import ConversationStatus
 
 router = APIRouter()
+
+
+def _normalize_status_filter(status: Optional[str]) -> Optional[ConversationStatus]:
+    if not status:
+        return None
+    normalized = status.strip().lower()
+    if normalized == "resolved":
+        normalized = "closed"
+    try:
+        return ConversationStatus[normalized.upper()]
+    except KeyError:
+        return None
+
+
+def _can_operate_conversation(current_user: User, conversation: Conversation) -> bool:
+    if current_user.user_type and current_user.user_type.can_view_all_conversations:
+        return True
+    return conversation.assigned_user_id is None or conversation.assigned_user_id == current_user.id
 
 # --- WebSocket ---
 @router.websocket("/ws")
@@ -94,11 +114,9 @@ async def get_conversations(
         )
     )
     if status:
-        from app.models.models import ConversationStatus as CS
-        try:
-            q = q.filter(Conversation.status == CS[status.upper()])
-        except KeyError:
-            pass
+        normalized_status = _normalize_status_filter(status)
+        if normalized_status:
+            q = q.filter(Conversation.status == normalized_status)
     if assigned_user_id:
         q = q.filter(Conversation.assigned_user_id == assigned_user_id)
 
@@ -192,6 +210,7 @@ async def update_conversation(
     conversation_id: UUID,
     update_data: ConversationUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Update conversation status, tag, or read state."""
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
@@ -200,6 +219,18 @@ async def update_conversation(
             code="CONVERSATION_NOT_FOUND",
             message="Conversation not found",
             status_code=404
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+    if not _can_operate_conversation(current_user, conversation):
+        error_response, status = create_error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to update this conversation",
+            details={
+                "conversation_id": str(conversation_id),
+                "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
+            },
+            status_code=403,
         )
         raise HTTPException(status_code=status, detail=error_response)
 
@@ -302,7 +333,7 @@ async def assign_conversation(
         "conversation_updated",
         {
             "id": str(conversation.id),
-            "status": conversation.status.value if conversation.status else None,
+            "status": serialize_conversation_status(conversation.status),
             "tag": conversation.tag.value if conversation.tag else None,
             "is_unread": conversation.is_unread,
             "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
@@ -436,7 +467,7 @@ async def delete_message(
         "conversation_updated",
         {
             "id": str(conversation.id),
-            "status": conversation.status.value if conversation.status else None,
+            "status": serialize_conversation_status(conversation.status),
             "tag": conversation.tag.value if conversation.tag else None,
             "is_unread": conversation.is_unread,
         },
