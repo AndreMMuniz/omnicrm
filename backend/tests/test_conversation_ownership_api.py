@@ -21,7 +21,12 @@ from app.models.models import (
     DefaultRole,
     Message,
     Project,
+    ProjectPriority,
     ProjectStage,
+    ProjectSourceType,
+    ProjectStatus,
+    Proposal,
+    ProposalStatus,
     User,
     UserType,
 )
@@ -54,6 +59,7 @@ def db():
         Message.__table__,
         ProjectStage.__table__,
         Project.__table__,
+        Proposal.__table__,
         Conversation.__table__,
     ]
     with engine.begin() as connection:
@@ -135,6 +141,13 @@ def _make_client(db, current_user):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user] = override_current_user
     return TestClient(app, raise_server_exceptions=True)
+
+
+def _seed_project_stage(db, key: str = "lead", label: str = "Lead", position: int = 1):
+    stage = ProjectStage(key=key, label=label, position=position, is_active=True)
+    db.add(stage)
+    db.flush()
+    return stage
 
 
 def test_list_assignable_users_returns_active_approved_users(db):
@@ -464,3 +477,148 @@ def test_update_conversation_supports_multiple_tags_and_legacy_primary_tag(db, m
 
     assert events[0][1]["tags"] == ["sales", "billing"]
     assert events[0][1]["tag"] == "sales"
+
+
+def test_get_conversation_context_returns_empty_linked_state_without_client(db):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client", email="client@example.com", phone="+5511999999999", channel_identifier="client-001")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WEB,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/chat/conversations/{conversation.id}/context")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["contact"]["name"] == "Client"
+    assert payload["contact"]["email"] == "client@example.com"
+    assert payload["client"] is None
+    assert payload["proposals"] == []
+    assert payload["projects"] == []
+    assert payload["signals"] == {
+        "has_linked_client": False,
+        "has_project_context": False,
+        "recent_proposals_count": 0,
+        "open_projects_count": 0,
+    }
+
+
+def test_get_conversation_context_includes_linked_client_proposals_and_projects(db):
+    from datetime import datetime, timedelta, timezone
+
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    _seed_project_stage(db, "lead", "Lead", 1)
+    _seed_project_stage(db, "proposal", "Proposal", 3)
+
+    linked_client = Client(
+        name="Acme",
+        company_name="Acme Corp",
+        country="BR",
+        client_type="company",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(linked_client)
+    db.flush()
+
+    contact = Contact(
+        name="Ana",
+        email="ana@acme.com",
+        phone="+5511888888888",
+        channel_identifier="ana-acme",
+        client_id=linked_client.id,
+    )
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.flush()
+
+    current_project = Project(
+        title="Migration kickoff",
+        description="Current scoped project",
+        stage="lead",
+        status=ProjectStatus.OPEN,
+        priority=ProjectPriority.HIGH,
+        source_type=ProjectSourceType.MANUAL,
+        client_id=linked_client.id,
+        contact_id=contact.id,
+        created_by_user_id=current_user.id,
+    )
+    older_project = Project(
+        title="Renewal plan",
+        description="Previous project",
+        stage="proposal",
+        status=ProjectStatus.DONE,
+        priority=ProjectPriority.MEDIUM,
+        source_type=ProjectSourceType.MANUAL,
+        client_id=linked_client.id,
+        contact_id=contact.id,
+        created_by_user_id=current_user.id,
+    )
+    db.add_all([current_project, older_project])
+    db.flush()
+
+    conversation.project_context_id = current_project.id
+
+    newer_proposal = Proposal(
+        title="Support expansion",
+        customer_name="Acme",
+        status=ProposalStatus.SENT,
+        total_amount=150000,
+        client_id=linked_client.id,
+        created_by_user_id=current_user.id,
+    )
+    older_proposal = Proposal(
+        title="Onboarding package",
+        customer_name="Acme",
+        status=ProposalStatus.DRAFT,
+        total_amount=90000,
+        client_id=linked_client.id,
+        created_by_user_id=current_user.id,
+    )
+    db.add_all([newer_proposal, older_proposal])
+    db.flush()
+
+    older_time = datetime.now(timezone.utc) - timedelta(days=2)
+    current_project.updated_at = datetime.now(timezone.utc)
+    older_project.updated_at = older_time
+    newer_proposal.updated_at = datetime.now(timezone.utc)
+    older_proposal.updated_at = older_time
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/chat/conversations/{conversation.id}/context")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["client"]["name"] == "Acme"
+    assert payload["signals"]["has_linked_client"] is True
+    assert payload["signals"]["has_project_context"] is True
+    assert payload["signals"]["recent_proposals_count"] == 2
+    assert payload["signals"]["open_projects_count"] == 1
+    assert [proposal["title"] for proposal in payload["proposals"]] == [
+        "Support expansion",
+        "Onboarding package",
+    ]
+    assert payload["projects"][0]["reference"] == current_project.reference_code
+    assert payload["projects"][0]["is_current_context"] is True
+    assert {project["title"] for project in payload["projects"]} == {
+        "Migration kickoff",
+        "Renewal plan",
+    }

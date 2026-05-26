@@ -7,12 +7,18 @@ from sqlalchemy.orm import Session, joinedload, load_only
 from sqlalchemy.orm.attributes import set_committed_value
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.models.models import Conversation, Message, User
+from app.models.models import Client, Conversation, Message, Project, Proposal, User
 from app.schemas.chat import (
     AISuggestionResponse,
     AssignedUserSlim,
     ConversationAssignmentUpdate,
+    ConversationCustomerContextResponse,
     ConversationResponse,
+    ContactResponse,
+    CustomerContextClientResponse,
+    CustomerContextProjectSummary,
+    CustomerContextProposalSummary,
+    CustomerContextSignalsResponse,
     InternalNoteCreate,
     ConversationUpdate,
     MessageResponse,
@@ -96,6 +102,131 @@ def _can_operate_conversation(current_user: User, conversation: Conversation) ->
     if current_user.user_type and current_user.user_type.can_view_all_conversations:
         return True
     return conversation.assigned_user_id is None or conversation.assigned_user_id == current_user.id
+
+
+def _serialize_customer_context_client(client: Client) -> CustomerContextClientResponse:
+    client_type = client.client_type.value if hasattr(client.client_type, "value") else str(client.client_type)
+    return CustomerContextClientResponse(
+        id=client.id,
+        name=client.name,
+        company_name=client.company_name,
+        country=client.country,
+        client_type=client_type,
+        currency=client.currency,
+    )
+
+
+def _serialize_customer_context_proposal(proposal: Proposal) -> CustomerContextProposalSummary:
+    status = proposal.status.value if hasattr(proposal.status, "value") else str(proposal.status)
+    return CustomerContextProposalSummary(
+        id=proposal.id,
+        reference=proposal.reference_code,
+        title=proposal.title,
+        status=status,
+        total_amount=proposal.total_amount,
+        updated_at=proposal.updated_at,
+    )
+
+
+def _serialize_customer_context_project(project: Project, *, is_current_context: bool) -> CustomerContextProjectSummary:
+    stage = project.stage.value if hasattr(project.stage, "value") else str(project.stage)
+    status = project.status.value if hasattr(project.status, "value") else str(project.status)
+    priority = project.priority.value if hasattr(project.priority, "value") else str(project.priority)
+    return CustomerContextProjectSummary(
+        id=project.id,
+        reference=project.reference_code,
+        title=project.title,
+        stage=stage,
+        status=status,
+        priority=priority,
+        updated_at=project.updated_at,
+        is_current_context=is_current_context,
+    )
+
+
+def _load_conversation_customer_context(db: Session, conversation: Conversation) -> ConversationCustomerContextResponse:
+    contact = conversation.contact
+    if not contact:
+        contact = conversation.contact
+
+    linked_client = None
+    if contact and getattr(contact, "client_id", None):
+        linked_client = (
+            db.query(Client)
+            .filter(Client.id == contact.client_id, Client.deleted_at.is_(None))
+            .first()
+        )
+
+    proposals: list[CustomerContextProposalSummary] = []
+    if linked_client:
+        recent_proposals = (
+            db.query(Proposal)
+            .filter(Proposal.client_id == linked_client.id)
+            .order_by(Proposal.updated_at.desc())
+            .limit(3)
+            .all()
+        )
+        proposals = [_serialize_customer_context_proposal(proposal) for proposal in recent_proposals]
+
+    project_candidates: dict[str, Project] = {}
+    if linked_client:
+        recent_projects = (
+            db.query(Project)
+            .filter(Project.client_id == linked_client.id)
+            .order_by(Project.updated_at.desc())
+            .limit(4)
+            .all()
+        )
+        for project in recent_projects:
+            project_candidates[str(project.id)] = project
+
+    if conversation.project_context_id:
+        current_project = (
+            db.query(Project)
+            .filter(Project.id == conversation.project_context_id)
+            .first()
+        )
+        if current_project:
+            project_candidates[str(current_project.id)] = current_project
+
+    ordered_projects = sorted(
+        project_candidates.values(),
+        key=lambda project: (
+            project.id != conversation.project_context_id,
+            -(project.updated_at.timestamp() if project.updated_at else 0),
+        ),
+    )[:4]
+
+    projects = [
+        _serialize_customer_context_project(
+            project,
+            is_current_context=project.id == conversation.project_context_id,
+        )
+        for project in ordered_projects
+    ]
+
+    open_projects_count = 0
+    if linked_client:
+        open_projects_count = (
+            db.query(Project)
+            .filter(Project.client_id == linked_client.id, Project.status == "open")
+            .count()
+        )
+    elif conversation.project_context_id:
+        open_projects_count = int(any(project.status == "open" for project in projects))
+
+    return ConversationCustomerContextResponse(
+        contact=ContactResponse.model_validate(contact),
+        client=_serialize_customer_context_client(linked_client) if linked_client else None,
+        proposals=proposals,
+        projects=projects,
+        signals=CustomerContextSignalsResponse(
+            has_linked_client=linked_client is not None,
+            has_project_context=conversation.project_context_id is not None,
+            recent_proposals_count=len(proposals),
+            open_projects_count=open_projects_count,
+        ),
+    )
 
 # --- WebSocket ---
 @router.websocket("/ws")
@@ -189,6 +320,41 @@ async def get_conversations(
         page=(skip // limit) + 1,
         page_size=limit,
     )
+
+
+@router.get("/conversations/{conversation_id}/context")
+@limiter.limit("60/minute")
+async def get_conversation_context(
+    request: Request,
+    conversation_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    conversation = (
+        _conversation_query(db, eager=True)
+        .options(joinedload(Conversation.contact))
+        .filter(Conversation.id == conversation_id)
+        .first()
+    )
+    if not conversation:
+        error_response, status = create_error_response(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+            status_code=404,
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+    if not _can_operate_conversation(current_user, conversation):
+        error_response, status = create_error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to view this conversation context",
+            details={"conversation_id": str(conversation_id)},
+            status_code=403,
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+    context = _load_conversation_customer_context(db, conversation)
+    return create_response(context)
 
 
 @router.get("/assignable-users")

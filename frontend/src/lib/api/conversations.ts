@@ -6,6 +6,7 @@ import type {
   AssignedUser,
   ClientMatch,
   Conversation,
+  ConversationCustomerContext,
   CreateInternalNoteRequest,
   Message,
   SendMessageRequest,
@@ -60,6 +61,12 @@ export async function getMessages(
   return apiGetList<Message>(
     `/chat/conversations/${conversationId}/messages?limit=${limit}`
   );
+}
+
+export async function getConversationContext(
+  conversationId: string,
+): Promise<ConversationCustomerContext> {
+  return apiGet<ConversationCustomerContext>(`/chat/conversations/${conversationId}/context`);
 }
 
 export async function sendMessage(

@@ -12,6 +12,47 @@ export interface ClientSummary {
   company_name?: string | null;
 }
 
+export interface CustomerContextClientSummary extends ClientSummary {
+  country: string;
+  client_type: string;
+  currency: string;
+}
+
+export interface CustomerContextProposalSummary {
+  id: string;
+  reference: string;
+  title: string;
+  status: string;
+  total_amount: number;
+  updated_at: string;
+}
+
+export interface CustomerContextProjectSummary {
+  id: string;
+  reference: string;
+  title: string;
+  stage: string;
+  status: string;
+  priority: string;
+  updated_at: string;
+  is_current_context: boolean;
+}
+
+export interface ConversationCustomerContextSignals {
+  has_linked_client: boolean;
+  has_project_context: boolean;
+  recent_proposals_count: number;
+  open_projects_count: number;
+}
+
+export interface ConversationCustomerContext {
+  contact: Contact;
+  client?: CustomerContextClientSummary | null;
+  proposals: CustomerContextProposalSummary[];
+  projects: CustomerContextProjectSummary[];
+  signals: ConversationCustomerContextSignals;
+}
+
 export interface ClientMatch extends ClientSummary {
   match_field: "linked";
 }

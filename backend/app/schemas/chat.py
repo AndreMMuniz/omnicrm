@@ -56,6 +56,50 @@ class ContactResponse(ContactBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CustomerContextClientResponse(BaseModel):
+    id: UUID
+    name: str
+    company_name: Optional[str] = None
+    country: str
+    client_type: str
+    currency: str
+
+
+class CustomerContextProposalSummary(BaseModel):
+    id: UUID
+    reference: str
+    title: str
+    status: str
+    total_amount: int
+    updated_at: datetime
+
+
+class CustomerContextProjectSummary(BaseModel):
+    id: UUID
+    reference: str
+    title: str
+    stage: str
+    status: str
+    priority: str
+    updated_at: datetime
+    is_current_context: bool = False
+
+
+class CustomerContextSignalsResponse(BaseModel):
+    has_linked_client: bool
+    has_project_context: bool
+    recent_proposals_count: int
+    open_projects_count: int
+
+
+class ConversationCustomerContextResponse(BaseModel):
+    contact: ContactResponse
+    client: Optional[CustomerContextClientResponse] = None
+    proposals: List[CustomerContextProposalSummary] = Field(default_factory=list)
+    projects: List[CustomerContextProjectSummary] = Field(default_factory=list)
+    signals: CustomerContextSignalsResponse
+
+
 class AssignedUserSlim(BaseModel):
     id: UUID
     full_name: str

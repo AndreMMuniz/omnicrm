@@ -18,7 +18,16 @@ import { useAISuggestions } from '@/hooks/useAISuggestions';
 import { useQuickReplySearch } from '@/hooks/useQuickReplies';
 import { conversationsApi, quickRepliesApi, projectsApi, clientsApi } from '@/lib/api/index';
 import { getStoredUser } from '@/lib/api';
-import type { ChannelType, Conversation, ConversationStatus, ConversationTag, Message } from '@/types/chat';
+import type {
+  ChannelType,
+  Conversation,
+  ConversationCustomerContext,
+  ConversationStatus,
+  ConversationTag,
+  CustomerContextProjectSummary,
+  CustomerContextProposalSummary,
+  Message,
+} from '@/types/chat';
 import type { ClientListDto } from '@/types/client';
 import type { ProjectDto, ProjectPriority, ProjectStage, ProjectStageKey, ProjectTaskDto, ProjectTaskStatus } from '@/types/project';
 import AudioMessage from '@/components/AudioMessage';
@@ -336,6 +345,49 @@ function formatRelativeTime(dateStr: string | undefined): string {
   if (days === 1) return 'Yesterday';
   if (days < 7) return new Date(dateStr).toLocaleDateString([], { weekday: 'short' });
   return new Date(dateStr).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function formatContextDate(dateStr: string | undefined): string {
+  if (!dateStr) return 'No recent activity';
+  return new Date(dateStr).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function formatContextCurrency(value: number, currency = 'BRL'): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency,
+    maximumFractionDigits: 0,
+  }).format(value ?? 0);
+}
+
+function getProjectStatusTone(status: string): string {
+  switch (status.toLowerCase()) {
+    case 'open':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    case 'done':
+      return 'border-sky-200 bg-sky-50 text-sky-700';
+    case 'archived':
+      return 'border-slate-200 bg-slate-100 text-slate-600';
+    default:
+      return 'border-slate-200 bg-slate-50 text-slate-600';
+  }
+}
+
+function getProposalStatusTone(status: string): string {
+  switch (status.toLowerCase()) {
+    case 'draft':
+      return 'border-amber-200 bg-amber-50 text-amber-700';
+    case 'sent':
+      return 'border-sky-200 bg-sky-50 text-sky-700';
+    case 'approved':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    case 'rejected':
+    case 'cancelled':
+    case 'expired':
+      return 'border-rose-200 bg-rose-50 text-rose-700';
+    default:
+      return 'border-slate-200 bg-slate-50 text-slate-600';
+  }
 }
 
 function TagBadge({ tags, className }: { tags?: ConversationTag[]; className?: string }) {
@@ -1065,6 +1117,9 @@ export default function ChatPage() {
   const [clientAlreadyLinked, setClientAlreadyLinked] = useState(false);
   const [clientDetecting, setClientDetecting] = useState(false);
   const [clientLinking, setClientLinking] = useState(false);
+  const [customerContext, setCustomerContext] = useState<ConversationCustomerContext | null>(null);
+  const [customerContextLoading, setCustomerContextLoading] = useState(false);
+  const [customerContextError, setCustomerContextError] = useState<string | null>(null);
   const [clientHistory, setClientHistory] = useState<import('@/lib/api/conversations').ConversationSummary[]>([]);
   const [clientHistoryLoading, setClientHistoryLoading] = useState(false);
   const [showQuickClientForm, setShowQuickClientForm] = useState(false);
@@ -1172,6 +1227,53 @@ export default function ChatPage() {
     setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
   }, []);
 
+  const refreshConversationCustomerContext = useCallback(async (conversationId: string) => {
+    setClientDetecting(true);
+    setCustomerContextLoading(true);
+    setCustomerContextError(null);
+
+    try {
+      const context = await conversationsApi.getConversationContext(conversationId);
+      setCustomerContext(context);
+
+      const linkedClient = context.client ?? null;
+      setClientAlreadyLinked(Boolean(linkedClient));
+      setClientMatches(
+        linkedClient
+          ? [{
+              id: linkedClient.id,
+              name: linkedClient.name,
+              company_name: linkedClient.company_name ?? null,
+              match_field: 'linked',
+            }]
+          : []
+      );
+
+      if (linkedClient) {
+        setClientHistoryLoading(true);
+        try {
+          const response = await conversationsApi.getClientConversations(linkedClient.id, { limit: 20 });
+          setClientHistory((response.data ?? []).filter((conversation) => conversation.id !== conversationId));
+        } catch {
+          setClientHistory([]);
+        } finally {
+          setClientHistoryLoading(false);
+        }
+      } else {
+        setClientHistory([]);
+      }
+    } catch (error) {
+      setCustomerContext(null);
+      setClientAlreadyLinked(false);
+      setClientMatches([]);
+      setClientHistory([]);
+      setCustomerContextError(error instanceof Error ? error.message : 'Failed to load customer context.');
+    } finally {
+      setClientDetecting(false);
+      setCustomerContextLoading(false);
+    }
+  }, []);
+
   const handleQuickReplyCreate = useCallback(async () => {
     if (!quickReplyModal) return;
 
@@ -1236,6 +1338,8 @@ export default function ChatPage() {
   // Detecta cliente vinculado ao trocar de conversa ativa
   useEffect(() => {
     if (!activeConversation?.id) {
+      setCustomerContext(null);
+      setCustomerContextError(null);
       setClientMatches([]);
       setClientAlreadyLinked(false);
       setClientHistory([]);
@@ -1251,27 +1355,8 @@ export default function ChatPage() {
     setExistingClientSearch('');
     setExistingClientResults([]);
     setExistingClientError(null);
-    const convId = activeConversation.id;
-    setClientDetecting(true);
-    conversationsApi.detectClientForConversation(convId)
-      .then(res => {
-        setClientMatches(res.matches ?? []);
-        setClientAlreadyLinked(res.already_linked ?? false);
-        if (res.already_linked && res.matches?.[0]) {
-          const linkedClientId = res.matches[0].id;
-          setClientHistoryLoading(true);
-          conversationsApi.getClientConversations(linkedClientId, { limit: 20 })
-            .then(r => setClientHistory((r.data ?? []).filter(c => c.id !== convId)))
-            .catch(() => setClientHistory([]))
-            .finally(() => setClientHistoryLoading(false));
-        } else {
-          setClientHistory([]);
-        }
-      })
-      .catch(() => { setClientMatches([]); setClientAlreadyLinked(false); })
-      .finally(() => setClientDetecting(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConversation?.id]);
+    void refreshConversationCustomerContext(activeConversation.id);
+  }, [activeConversation?.id, refreshConversationCustomerContext]);
 
   useEffect(() => {
     if (!showExistingClientPicker || !activeConversation?.contact_id) return;
@@ -1347,6 +1432,12 @@ export default function ChatPage() {
 
     return matchesSearch && matchesChannel && matchesStatus && matchesTag && matchesOwner;
   });
+
+  const contextContact = customerContext?.contact ?? activeConversation?.contact;
+  const linkedClient = customerContext?.client ?? null;
+  const recentProposalSummaries = customerContext?.proposals ?? [];
+  const recentProjectSummaries = customerContext?.projects ?? [];
+  const contextSignals = customerContext?.signals ?? null;
 
   const assignConversationOwner = useCallback(async (conversationId: string, userId: string | null) => {
     await conversationsApi.assignConversation(conversationId, userId);
@@ -2773,7 +2864,7 @@ export default function ChatPage() {
                   <div className="pt-4 px-4">
                     <div className="flex flex-col items-center gap-2 pb-4 mb-4 border-b border-[#E9ECEF]">
                       {(() => {
-                        const rpName = activeConversation.contact.name || activeConversation.contact.channel_identifier || 'U';
+                        const rpName = contextContact?.name || contextContact?.channel_identifier || 'U';
                         const rpColor = avatarColor(rpName);
                         const rpIni = rpName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
                         return (
@@ -2782,8 +2873,8 @@ export default function ChatPage() {
                         );
                       })()}
                       <div className="text-center">
-                        <p className="text-[15px] font-bold text-[#1d1a24]">{activeConversation.contact.name || '-'}</p>
-                        <p className="text-[12px] text-[#7a7487] mt-0.5 truncate max-w-[220px]">{activeConversation.contact.channel_identifier}</p>
+                        <p className="text-[15px] font-bold text-[#1d1a24]">{contextContact?.name || '-'}</p>
+                        <p className="text-[12px] text-[#7a7487] mt-0.5 truncate max-w-[220px]">{contextContact?.channel_identifier}</p>
                       </div>
                       <ChannelBadge channel={activeConversation.channel} />
                     </div>
@@ -2791,8 +2882,10 @@ export default function ChatPage() {
                       <p className="text-[10px] font-bold text-[#575f67] uppercase mb-2" style={{ letterSpacing: '0.06em' }}>Contact details</p>
                       <div className="space-y-2 text-[12px]">
                         {[
-                          { label: 'Name', value: activeConversation.contact.name || '-' },
-                          { label: 'Identifier', value: activeConversation.contact.channel_identifier },
+                          { label: 'Name', value: contextContact?.name || '-' },
+                          { label: 'Identifier', value: contextContact?.channel_identifier || '-' },
+                          { label: 'Email', value: contextContact?.email || '-' },
+                          { label: 'Phone', value: contextContact?.phone || '-' },
                           { label: 'Channel', value: getChannelMeta(activeConversation.channel).label },
                         ].map(({ label, value }) => (
                           <div key={label} className="flex justify-between items-center">
@@ -2821,30 +2914,38 @@ export default function ChatPage() {
                           Detecting…
                         </div>
 
-                      ) : clientAlreadyLinked && clientMatches[0] ? (
+                      ) : clientAlreadyLinked && linkedClient ? (
                         /* ── Já vinculado ── */
                         <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 space-y-1.5">
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
-                              <p className="text-[12px] font-semibold text-slate-800 truncate">{clientMatches[0].name}</p>
-                              {clientMatches[0].company_name && (
-                                <p className="text-[11px] text-slate-500 truncate">{clientMatches[0].company_name}</p>
+                              <p className="text-[12px] font-semibold text-slate-800 truncate">{linkedClient.name}</p>
+                              {linkedClient.company_name && (
+                                <p className="text-[11px] text-slate-500 truncate">{linkedClient.company_name}</p>
                               )}
+                              <p className="text-[10px] text-slate-400 mt-1">{linkedClient.client_type} · {linkedClient.country} · {linkedClient.currency}</p>
                             </div>
-                            <button
-                              onClick={async () => {
-                                if (!activeConversation.contact_id) return;
-                                if (!confirm('Unlink this client?')) return;
-                                await conversationsApi.linkContactToClient(activeConversation.contact_id, null).catch(() => {});
-                                setClientAlreadyLinked(false);
-                                setClientMatches([]);
-                                setClientHistory([]);
-                              }}
-                              className="shrink-0 text-[10px] text-slate-400 hover:text-red-500 transition-colors"
-                              title="Unlink"
-                            >
-                              <span className="material-symbols-outlined text-[14px]">link_off</span>
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => router.push(`/clients?clientId=${linkedClient.id}`)}
+                                className="shrink-0 text-[10px] text-slate-400 hover:text-indigo-600 transition-colors"
+                                title="Open client"
+                              >
+                                <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  if (!activeConversation.contact_id) return;
+                                  if (!confirm('Unlink this client?')) return;
+                                  await conversationsApi.linkContactToClient(activeConversation.contact_id, null).catch(() => {});
+                                  await refreshConversationCustomerContext(activeConversation.id);
+                                }}
+                                className="shrink-0 text-[10px] text-slate-400 hover:text-red-500 transition-colors"
+                                title="Unlink"
+                              >
+                                <span className="material-symbols-outlined text-[14px]">link_off</span>
+                              </button>
+                            </div>
                           </div>
                           <button
                             onClick={() => setRightPanelTab('history')}
@@ -2870,14 +2971,9 @@ export default function ChatPage() {
                                   setClientLinking(true);
                                   try {
                                     await conversationsApi.linkContactToClient(activeConversation.contact_id, m.id);
-                                    setClientAlreadyLinked(true);
-                                    setClientMatches([m]);
-                                    setClientHistoryLoading(true);
-                                    const r = await conversationsApi.getClientConversations(m.id, { limit: 20 });
-                                    setClientHistory((r.data ?? []).filter(c => c.id !== activeConversation.id));
+                                    await refreshConversationCustomerContext(activeConversation.id);
                                   } catch { /* ignore */ } finally {
                                     setClientLinking(false);
-                                    setClientHistoryLoading(false);
                                   }
                                 }}
                                 className="w-full rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-medium py-1.5 transition-colors disabled:opacity-60"
@@ -2941,9 +3037,8 @@ export default function ChatPage() {
                                     company_name: quickClientForm.company_name || null,
                                   });
                                   await conversationsApi.linkContactToClient(activeConversation.contact_id, newClient.id);
-                                  setClientAlreadyLinked(true);
-                                  setClientMatches([{ id: newClient.id, name: newClient.name, company_name: newClient.company_name ?? null, match_field: 'linked' }]);
                                   setShowQuickClientForm(false);
+                                  await refreshConversationCustomerContext(activeConversation.id);
                                 } catch (err: unknown) {
                                   setQuickClientError(err instanceof Error ? err.message : 'Failed to create client.');
                                 } finally {
@@ -3002,22 +3097,12 @@ export default function ChatPage() {
                                         setExistingClientError(null);
                                         try {
                                           await conversationsApi.linkContactToClient(activeConversation.contact_id, client.id);
-                                          setClientAlreadyLinked(true);
-                                          setClientMatches([{
-                                            id: client.id,
-                                            name: client.name,
-                                            company_name: client.company_name ?? null,
-                                            match_field: 'linked',
-                                          }]);
                                           setShowExistingClientPicker(false);
-                                          setClientHistoryLoading(true);
-                                          const response = await conversationsApi.getClientConversations(client.id, { limit: 20 });
-                                          setClientHistory((response.data ?? []).filter(c => c.id !== activeConversation.id));
+                                          await refreshConversationCustomerContext(activeConversation.id);
                                         } catch (err: unknown) {
                                           setExistingClientError(err instanceof Error ? err.message : 'Failed to link client.');
                                         } finally {
                                           setClientLinking(false);
-                                          setClientHistoryLoading(false);
                                         }
                                       }}
                                       className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-left transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:opacity-60"
@@ -3055,6 +3140,125 @@ export default function ChatPage() {
                           </button>
                         </div>
                       )}
+                    </div>
+
+                    <div className="border-t border-[#E9ECEF] pt-3.5 mt-3.5 space-y-3.5">
+                      <div>
+                        <p className="text-[10px] font-bold text-[#575f67] uppercase mb-2" style={{ letterSpacing: '0.06em' }}>Context signals</p>
+                        {customerContextLoading ? (
+                          <div className="flex items-center gap-2 text-xs text-slate-400">
+                            <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                            Loading context…
+                          </div>
+                        ) : customerContextError ? (
+                          <p className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] text-rose-600">
+                            {customerContextError}
+                          </p>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-2">
+                            {[
+                              { label: 'Linked client', value: contextSignals?.has_linked_client ? 'Yes' : 'No' },
+                              { label: 'Project context', value: contextSignals?.has_project_context ? 'Attached' : 'Missing' },
+                              { label: 'Recent proposals', value: String(contextSignals?.recent_proposals_count ?? 0) },
+                              { label: 'Open projects', value: String(contextSignals?.open_projects_count ?? 0) },
+                            ].map((signal) => (
+                              <div key={signal.label} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-[0.08em] text-slate-400">{signal.label}</p>
+                                <p className="mt-1 text-[13px] font-semibold text-slate-800">{signal.value}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <p className="text-[10px] font-bold text-[#575f67] uppercase" style={{ letterSpacing: '0.06em' }}>Recent proposals</p>
+                          {linkedClient ? (
+                            <button
+                              onClick={() => router.push('/proposals')}
+                              className="text-[11px] text-indigo-600 hover:underline"
+                            >
+                              Open workspace
+                            </button>
+                          ) : null}
+                        </div>
+                        {!linkedClient ? (
+                          <p className="rounded-xl border border-dashed border-slate-200 px-3 py-2 text-[11px] text-slate-400">
+                            Link a client to surface commercial proposal context here.
+                          </p>
+                        ) : recentProposalSummaries.length === 0 ? (
+                          <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-400">
+                            No recent proposals for this client yet.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {recentProposalSummaries.map((proposal: CustomerContextProposalSummary) => (
+                              <button
+                                key={proposal.id}
+                                onClick={() => router.push(`/proposals?proposalId=${proposal.id}`)}
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-slate-300 hover:bg-slate-50"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-[12px] font-semibold text-slate-800">{proposal.reference}</p>
+                                  <span className={cn('inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize', getProposalStatusTone(proposal.status))}>
+                                    {proposal.status}
+                                  </span>
+                                </div>
+                                <p className="mt-1 truncate text-[11px] text-slate-500">{proposal.title}</p>
+                                <p className="mt-1 text-[10px] text-slate-400">
+                                  {formatContextCurrency(proposal.total_amount, linkedClient.currency)} · {formatContextDate(proposal.updated_at)}
+                                </p>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <p className="text-[10px] font-bold text-[#575f67] uppercase" style={{ letterSpacing: '0.06em' }}>Recent projects</p>
+                          <button
+                            onClick={() => router.push('/projects')}
+                            className="text-[11px] text-indigo-600 hover:underline"
+                          >
+                            Open workspace
+                          </button>
+                        </div>
+                        {recentProjectSummaries.length === 0 ? (
+                          <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-400">
+                            No recent project context for this conversation yet.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {recentProjectSummaries.map((project: CustomerContextProjectSummary) => (
+                              <button
+                                key={project.id}
+                                onClick={() => router.push(`/projects?projectId=${project.id}`)}
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-slate-300 hover:bg-slate-50"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-[12px] font-semibold text-slate-800">{project.reference}</p>
+                                  <div className="flex items-center gap-1.5">
+                                    {project.is_current_context ? (
+                                      <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
+                                        Current context
+                                      </span>
+                                    ) : null}
+                                    <span className={cn('inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize', getProjectStatusTone(project.status))}>
+                                      {project.status}
+                                    </span>
+                                  </div>
+                                </div>
+                                <p className="mt-1 truncate text-[11px] text-slate-500">{project.title}</p>
+                                <p className="mt-1 text-[10px] text-slate-400">
+                                  {project.stage} · {project.priority} priority · {formatContextDate(project.updated_at)}
+                                </p>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
