@@ -37,7 +37,7 @@ import { getMessagesWorkspaceFilters, saveMessagesWorkspaceFilters } from '@/lib
 
 // ── Assignment Panel (Story 3.5) ──────────────────────────────────────────────
 
-function AssignmentPanel({ conversation, agents, onAssign }: {
+function __REMOVE_AssignmentPanel({ conversation, agents, onAssign }: {
   conversation: Conversation;
   agents: { id: string; full_name: string }[];
   onAssign: (userId: string | null) => Promise<void>;
@@ -1010,9 +1010,7 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [searchQuery, setSearchQuery] = useState(cachedFilters.searchQuery);
   const [selectedChannel, setSelectedChannel] = useState<'ALL' | ChannelType>(cachedFilters.selectedChannel as 'ALL' | ChannelType);
-  const [selectedStatus, setSelectedStatus] = useState<'ALL' | ConversationStatus>(cachedFilters.selectedStatus as 'ALL' | ConversationStatus);
   const [selectedTag, setSelectedTag] = useState<'ALL' | ConversationTag>(cachedFilters.selectedTag as 'ALL' | ConversationTag);
-  const [selectedOwner, setSelectedOwner] = useState<'ALL' | 'UNASSIGNED' | string>(cachedFilters.selectedOwner);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -1068,8 +1066,6 @@ export default function ChatPage() {
   const [internalNoteDraft, setInternalNoteDraft] = useState('');
   const [handledQueryConversationId, setHandledQueryConversationId] = useState<string | null>(null);
   const [showConnectionBanner, setShowConnectionBanner] = useState(false);
-  const [assignableUsers, setAssignableUsers] = useState<{ id: string; full_name: string }[]>([]);
-
   useEffect(() => {
     quickRepliesApi.listQuickReplies().then(r => setAllQuickReplies(r.data ?? [])).catch(() => {});
   }, []);
@@ -1079,21 +1075,11 @@ export default function ChatPage() {
     saveMessagesWorkspaceFilters(cachedWorkspaceUserId, {
       searchQuery,
       selectedChannel,
-      selectedStatus,
       selectedTag,
-      selectedOwner,
+      selectedStatus: 'ALL',
+      selectedOwner: 'ALL',
     });
-  }, [cachedWorkspaceUserId, searchQuery, selectedChannel, selectedStatus, selectedTag, selectedOwner]);
-
-  useEffect(() => {
-    conversationsApi.getAssignableUsers()
-      .then((users) => {
-        setAssignableUsers(users.map((item) => ({ id: item.id, full_name: item.full_name })));
-      })
-      .catch(() => {
-        setAssignableUsers([]);
-      });
-  }, []);
+  }, [cachedWorkspaceUserId, searchQuery, selectedChannel, selectedTag]);
 
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -1310,23 +1296,16 @@ export default function ChatPage() {
   ]);
 
   const availableChannels = Object.keys(CHANNEL_META) as ChannelType[];
-  const hasActiveFilters = Boolean(searchQuery.trim()) || selectedChannel !== 'ALL' || selectedStatus !== 'ALL' || selectedTag !== 'ALL' || selectedOwner !== 'ALL';
+  const hasActiveFilters = Boolean(searchQuery.trim()) || selectedChannel !== 'ALL' || selectedTag !== 'ALL';
   const selectedTagLabel = selectedTag === 'ALL' ? null : TAG_META[selectedTag].label;
-  const selectedStatusLabel = selectedStatus === 'ALL' ? null : getConversationStatusMeta(selectedStatus).label.toLowerCase();
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const canUseAISuggestions = Boolean(activeConversation && lastMessage?.inbound);
   const emptyStateMessage = !hasActiveFilters
     ? 'No conversations yet'
     : selectedTag !== 'ALL'
       ? `No conversations match the ${selectedTagLabel} tag with the current filters`
-      : selectedStatus !== 'ALL'
-        ? `No conversations match the ${selectedStatusLabel} status with the current filters`
       : selectedChannel !== 'ALL'
         ? `No conversations match the ${getChannelMeta(selectedChannel).label} channel with the current filters`
-        : selectedOwner === 'UNASSIGNED'
-          ? 'No unassigned conversations match the current filters'
-          : selectedOwner !== 'ALL'
-            ? 'No conversations match the selected owner with the current filters'
         : 'No conversations match the current filters';
 
   const filteredConversations = sortedConversations.filter((c) => {
@@ -1336,12 +1315,9 @@ export default function ChatPage() {
       c.contact.channel_identifier?.toLowerCase().includes(q)
     );
     const matchesChannel = selectedChannel === 'ALL' || c.channel.toUpperCase() === selectedChannel;
-    const matchesStatus = selectedStatus === 'ALL' || c.status === selectedStatus;
     const matchesTag = selectedTag === 'ALL' || c.tags.includes(selectedTag);
-    const matchesOwner = selectedOwner === 'ALL'
-      || (selectedOwner === 'UNASSIGNED' ? !c.assigned_user_id : c.assigned_user_id === selectedOwner);
 
-    return matchesSearch && matchesChannel && matchesStatus && matchesTag && matchesOwner;
+    return matchesSearch && matchesChannel && matchesTag;
   });
 
   const contextContact = customerContext?.contact ?? activeConversation?.contact;
@@ -1349,11 +1325,6 @@ export default function ChatPage() {
   const recentProposalSummaries = customerContext?.proposals ?? [];
   const recentProjectSummaries = customerContext?.projects ?? [];
   const contextSignals = customerContext?.signals ?? null;
-
-  const assignConversationOwner = useCallback(async (conversationId: string, userId: string | null) => {
-    await conversationsApi.assignConversation(conversationId, userId);
-    await fetchConversations();
-  }, [fetchConversations]);
 
   const openCreateCardModalForMessage = useCallback(async (message: Message) => {
     if (!activeConversation) return;
@@ -1922,23 +1893,6 @@ export default function ChatPage() {
               {/* Tag filter dropdown */}
               <div className="relative">
                 <select
-                  value={selectedStatus}
-                  onChange={(event) => setSelectedStatus(event.target.value as ConversationStatus | 'ALL')}
-                  className="h-8 w-full appearance-none rounded-full border border-emerald-200 bg-emerald-50 px-3 pr-8 text-[11px] font-semibold text-emerald-700 outline-none transition-colors"
-                >
-                  <option value="ALL">All statuses</option>
-                  {STATUS_OPTIONS.map((status) => (
-                    <option key={status} value={status}>
-                      {getConversationStatusMeta(status).label}
-                    </option>
-                  ))}
-                </select>
-                <span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[16px] text-emerald-700">
-                  expand_more
-                </span>
-              </div>
-              <div className="relative">
-                <select
                   value={selectedTag}
                   onChange={(event) => setSelectedTag(event.target.value as ConversationTag | 'ALL')}
                   className="h-8 w-full appearance-none rounded-full border border-[#c7d2fe] bg-[#eef2ff] px-3 pr-8 text-[11px] font-semibold text-[#4338ca] outline-none transition-colors"
@@ -1951,24 +1905,6 @@ export default function ChatPage() {
                   ))}
                 </select>
                 <span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[16px] text-[#4338ca]">
-                  expand_more
-                </span>
-              </div>
-              <div className="relative">
-                <select
-                  value={selectedOwner}
-                  onChange={(event) => setSelectedOwner(event.target.value)}
-                  className="h-8 w-full appearance-none rounded-full border border-slate-200 bg-white px-3 pr-8 text-[11px] font-semibold text-slate-600 outline-none transition-colors"
-                >
-                  <option value="ALL">All owners</option>
-                  <option value="UNASSIGNED">Unassigned</option>
-                  {assignableUsers.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.full_name}
-                    </option>
-                  ))}
-                </select>
-                <span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[16px] text-slate-500">
                   expand_more
                 </span>
               </div>
@@ -1985,9 +1921,7 @@ export default function ChatPage() {
                     onClick={() => {
                       setSearchQuery('');
                       setSelectedChannel('ALL');
-                      setSelectedStatus('ALL');
                       setSelectedTag('ALL');
-                      setSelectedOwner('ALL');
                     }}
                     className="mt-3 inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-800"
                   >
@@ -3162,41 +3096,6 @@ export default function ChatPage() {
                 {/* ── Details tab ── */}
                 {rightPanelTab === 'details' && (
                   <div className="p-4 space-y-5">
-                    {/* Status */}
-                    <div>
-                      <p className="text-[10px] font-bold text-[#575f67] uppercase mb-2" style={{ letterSpacing: '0.06em' }}>Status</p>
-                      <div className="flex gap-1.5">
-                        {STATUS_OPTIONS.map((s) => {
-                          const meta = getConversationStatusMeta(s);
-                          const isActive = activeConversation.status === s;
-                          return (
-                            <button
-                              key={s}
-                              onClick={() => updateConversation(activeConversation.id, { status: s })}
-                              className={cn(
-                                "flex-1 py-[5px] rounded-[7px] border text-[11px] font-semibold transition-all",
-                                isActive ? meta.buttonActiveClassName : "bg-white text-[#575f67] border-[#e2e8f0] hover:border-slate-300"
-                              )}
-                            >
-                              {meta.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Assigned Agent */}
-                    <div>
-                      <p className="text-[10px] font-bold text-[#575f67] uppercase mb-2" style={{ letterSpacing: '0.06em' }}>Assigned Agent</p>
-                      <AssignmentPanel
-                        conversation={activeConversation}
-                        agents={assignableUsers}
-                        onAssign={async (userId) => {
-                          await assignConversationOwner(activeConversation.id, userId);
-                        }}
-                      />
-                    </div>
-
                     {/* Tag */}
                     <div>
                       <p className="text-[10px] font-bold text-[#575f67] uppercase mb-2" style={{ letterSpacing: '0.06em' }}>Conversation Tag</p>
