@@ -16,7 +16,7 @@ import Modal from '@/components/shared/Modal';
 import { useAuth } from '@/hooks/useAuth';
 import { useAISuggestions } from '@/hooks/useAISuggestions';
 import { useQuickReplySearch } from '@/hooks/useQuickReplies';
-import { conversationsApi, quickRepliesApi, projectsApi, clientsApi } from '@/lib/api/index';
+import { conversationsApi, quickRepliesApi, projectsApi, clientsApi, proposalsApi } from '@/lib/api/index';
 import { getStoredUser } from '@/lib/api';
 import type {
   ChannelType,
@@ -391,6 +391,10 @@ type QuickReplyFromMessageState = {
 
 type DeleteMessageState = {
   message: Message;
+};
+
+type DeleteProposalState = {
+  proposal: CustomerContextProposalSummary;
 };
 
 type CreateTaskModalState = {
@@ -1000,6 +1004,53 @@ function DeleteMessageModal({
   );
 }
 
+function DeleteProposalModal({
+  state,
+  deleting,
+  onDelete,
+  onClose,
+}: {
+  state: DeleteProposalState;
+  deleting: boolean;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title="Delete Proposal" onClose={onClose} maxWidth="max-w-lg">
+      <div className="space-y-5">
+        <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-rose-600">Selected proposal</p>
+          <p className="mt-3 text-sm font-semibold text-slate-800">{state.proposal.reference}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{state.proposal.title}</p>
+        </div>
+
+        <p className="text-sm leading-6 text-slate-500">
+          Delete this proposal permanently? This action cannot be undone.
+        </p>
+
+        <div className="flex items-center justify-end gap-3 border-t border-slate-200 pt-5">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={deleting}
+            className="inline-flex h-11 items-center justify-center rounded-2xl border border-slate-200 px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={deleting}
+            className="inline-flex h-11 items-center justify-center rounded-2xl bg-rose-600 px-4 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-rose-300"
+          >
+            {deleting ? 'Deleting...' : 'Delete Proposal'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -1062,6 +1113,8 @@ export default function ChatPage() {
   const [creatingQuickReply, setCreatingQuickReply] = useState(false);
   const [deleteMessageModal, setDeleteMessageModal] = useState<DeleteMessageState | null>(null);
   const [deletingMessage, setDeletingMessage] = useState(false);
+  const [deleteProposalModal, setDeleteProposalModal] = useState<DeleteProposalState | null>(null);
+  const [deletingProposal, setDeletingProposal] = useState(false);
   const [savingInternalNote, setSavingInternalNote] = useState(false);
   const [internalNoteDraft, setInternalNoteDraft] = useState('');
   const [handledQueryConversationId, setHandledQueryConversationId] = useState<string | null>(null);
@@ -1220,6 +1273,7 @@ export default function ChatPage() {
     activateConversation,
   } = useMessagesSessionContext();
   const canDeleteConversations = Boolean(user?.user_type?.can_delete_conversations);
+  const canDeleteProposals = user?.user_type?.base_role === 'ADMIN' || user?.user_type?.base_role === 'MANAGER';
 
   // Story 3.3 — sort by SLA risk: breached first, then by wait time desc
   const sortedConversations = [...conversations].sort((a, b) => {
@@ -1644,6 +1698,22 @@ export default function ChatPage() {
       setDeletingMessage(false);
     }
   }, [activeConversation, deleteMessageModal, fetchConversations, fetchMessages]);
+
+  const handleDeleteProposal = useCallback(async () => {
+    if (!deleteProposalModal || !activeConversation) return;
+
+    try {
+      setDeletingProposal(true);
+      await proposalsApi.deleteProposal(deleteProposalModal.proposal.id);
+      setDeleteProposalModal(null);
+      await refreshConversationCustomerContext(activeConversation.id);
+      setContextActionHint({ message: 'Proposal deleted.' });
+    } catch (error) {
+      setContextActionHint({ message: error instanceof Error ? error.message : 'Failed to delete proposal.' });
+    } finally {
+      setDeletingProposal(false);
+    }
+  }, [activeConversation, deleteProposalModal, refreshConversationCustomerContext]);
 
   // ── WebSocket event dispatcher ─────────────────────────────────────────────
   useEffect(() => {
@@ -3024,22 +3094,46 @@ export default function ChatPage() {
                         ) : (
                           <div className="space-y-2">
                             {recentProposalSummaries.map((proposal: CustomerContextProposalSummary) => (
-                              <button
+                              <div
                                 key={proposal.id}
                                 onClick={() => router.push(`/proposals?proposalId=${proposal.id}`)}
-                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-slate-300 hover:bg-slate-50"
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
+                                    router.push(`/proposals?proposalId=${proposal.id}`);
+                                  }
+                                }}
+                                className="cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2 transition-colors hover:border-slate-300 hover:bg-slate-50"
                               >
                                 <div className="flex items-center justify-between gap-2">
                                   <p className="truncate text-[12px] font-semibold text-slate-800">{proposal.reference}</p>
-                                  <span className={cn('inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize', getProposalStatusTone(proposal.status))}>
-                                    {proposal.status}
-                                  </span>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={cn('inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize', getProposalStatusTone(proposal.status))}>
+                                      {proposal.status}
+                                    </span>
+                                    {canDeleteProposals ? (
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          setDeleteProposalModal({ proposal });
+                                        }}
+                                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                                        aria-label={`Delete proposal ${proposal.reference}`}
+                                        title="Delete proposal"
+                                      >
+                                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                                      </button>
+                                    ) : null}
+                                  </div>
                                 </div>
                                 <p className="mt-1 truncate text-[11px] text-slate-500">{proposal.title}</p>
                                 <p className="mt-1 text-[10px] text-slate-400">
                                   {formatContextCurrency(proposal.total_amount, linkedClient.currency)} · {formatContextDate(proposal.updated_at)}
                                 </p>
-                              </button>
+                              </div>
                             ))}
                           </div>
                         )}
@@ -3279,6 +3373,15 @@ export default function ChatPage() {
           deleting={deletingMessage}
           onDelete={handleDeleteMessage}
           onClose={() => setDeleteMessageModal(null)}
+        />
+      )}
+
+      {deleteProposalModal && (
+        <DeleteProposalModal
+          state={deleteProposalModal}
+          deleting={deletingProposal}
+          onDelete={handleDeleteProposal}
+          onClose={() => setDeleteProposalModal(null)}
         />
       )}
 
