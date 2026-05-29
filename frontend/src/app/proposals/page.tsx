@@ -205,15 +205,13 @@ export default function ProposalsPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [proposalPendingDelete, setProposalPendingDelete] = useState<ProposalDto | ProposalDetailDto | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ProposalStatus | "ALL">("ALL");
   const [appliedCreatePrefill, setAppliedCreatePrefill] = useState(false);
-  const canDeleteProposal = useMemo(() => {
-    const role = user?.user_type?.base_role;
-    return role === "ADMIN" || role === "MANAGER";
-  }, [user]);
+  const canDeleteProposal = useMemo(() => Boolean(user), [user]);
 
   // carrega clientes para o seletor
   useEffect(() => {
@@ -373,17 +371,20 @@ export default function ProposalsPage() {
   }
 
   async function handleDeleteProposal() {
-    if (!selectedProposal) return;
+    if (!proposalPendingDelete) return;
     try {
       setIsUpdating(true);
       setErrorMessage(null);
-      await proposalsApi.deleteProposal(selectedProposal.id);
-      const nextProposals = proposals.filter((proposal) => proposal.id !== selectedProposal.id);
+      await proposalsApi.deleteProposal(proposalPendingDelete.id);
+      const nextProposals = proposals.filter((proposal) => proposal.id !== proposalPendingDelete.id);
       setProposals(nextProposals);
-      setSelectedProposal(null);
-      setProposalForm(EMPTY_FORM);
-      setSelectedProposalId(nextProposals[0]?.id ?? null);
+      if (selectedProposal?.id === proposalPendingDelete.id) {
+        setSelectedProposal(null);
+        setProposalForm(EMPTY_FORM);
+        setSelectedProposalId(nextProposals[0]?.id ?? null);
+      }
       setIsDeleteModalOpen(false);
+      setProposalPendingDelete(null);
       setActionMessage("Proposal deleted.");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to delete proposal.");
@@ -501,11 +502,18 @@ export default function ProposalsPage() {
                 const statusMeta = STATUS_META[proposal.status] ?? STATUS_META.draft;
                 const clientName = clients.find((c) => c.id === proposal.client_id)?.name;
                 return (
-                  <button
+                  <div
                     key={proposal.id}
-                    type="button"
                     onClick={() => setSelectedProposalId(proposal.id)}
-                    className={`w-full px-5 py-4 text-left transition hover:bg-slate-50 ${isSelected ? "bg-amber-50/50" : "bg-white"}`}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedProposalId(proposal.id);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    className={`cursor-pointer px-5 py-4 transition hover:bg-slate-50 ${isSelected ? "bg-amber-50/50" : "bg-white"}`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -515,9 +523,28 @@ export default function ProposalsPage() {
                           {clientName ?? proposal.customer_name ?? "No client"} · {proposal.items_count} item(s)
                         </p>
                       </div>
-                      <span className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${statusMeta.className}`}>
-                        {statusMeta.label}
-                      </span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${statusMeta.className}`}>
+                          {statusMeta.label}
+                        </span>
+                        {canDeleteProposal ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedProposalId(proposal.id);
+                              setProposalPendingDelete(proposal);
+                              setIsDeleteModalOpen(true);
+                            }}
+                            disabled={isUpdating}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+                            aria-label={`Delete proposal ${proposal.reference}`}
+                            title="Delete proposal"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">delete</span>
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                     <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
                       <span>{formatDate(proposal.updated_at)}</span>
@@ -525,7 +552,7 @@ export default function ProposalsPage() {
                         {formatCurrency(proposal.total_amount, proposal.currency)}
                       </span>
                     </div>
-                  </button>
+                  </div>
                 );
               })}
               {!isLoading && visibleProposals.length === 0 && (
@@ -555,7 +582,10 @@ export default function ProposalsPage() {
                 onStatusChange={handleStatusChange}
                 onItemUpdate={handleItemUpdate}
                 onItemRemove={handleItemRemove}
-                onDeleteProposal={() => setIsDeleteModalOpen(true)}
+                onDeleteProposal={() => {
+                  setProposalPendingDelete(selectedProposal);
+                  setIsDeleteModalOpen(true);
+                }}
               />
             ) : (
               <div className="flex h-full min-h-[320px] flex-col items-center justify-center px-6 text-center">
@@ -662,21 +692,32 @@ export default function ProposalsPage() {
         </Modal>
       )}
 
-      {isDeleteModalOpen && selectedProposal ? (
-        <Modal title="Delete proposal" onClose={() => !isUpdating && setIsDeleteModalOpen(false)} maxWidth="max-w-md">
+      {isDeleteModalOpen && proposalPendingDelete ? (
+        <Modal
+          title="Delete proposal"
+          onClose={() => {
+            if (isUpdating) return;
+            setIsDeleteModalOpen(false);
+            setProposalPendingDelete(null);
+          }}
+          maxWidth="max-w-md"
+        >
           <div className="space-y-4">
             <p className="text-sm leading-6 text-slate-600">
               Delete this proposal permanently? This action cannot be undone.
             </p>
             <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3">
-              <p className="text-sm font-semibold text-slate-900">{selectedProposal.title}</p>
-              <p className="mt-1 text-xs text-slate-500">{selectedProposal.reference}</p>
+              <p className="text-sm font-semibold text-slate-900">{proposalPendingDelete.title}</p>
+              <p className="mt-1 text-xs text-slate-500">{proposalPendingDelete.reference}</p>
             </div>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
                 disabled={isUpdating}
-                onClick={() => setIsDeleteModalOpen(false)}
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setProposalPendingDelete(null);
+                }}
                 className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-60"
               >
                 Cancel
@@ -1113,10 +1154,11 @@ function ProposalDetail({
                   type="button"
                   onClick={onDeleteProposal}
                   disabled={isUpdating}
-                  className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+                  aria-label="Delete proposal"
+                  title="Delete proposal"
                 >
-                  <span className="material-symbols-outlined text-[16px]">delete</span>
-                  Delete proposal
+                  <span className="material-symbols-outlined text-[18px]">delete</span>
                 </button>
               ) : null}
             </div>

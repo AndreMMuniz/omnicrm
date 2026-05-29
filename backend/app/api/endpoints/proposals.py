@@ -181,15 +181,6 @@ async def delete_proposal(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    base_role = getattr(getattr(current_user, "user_type", None), "base_role", None)
-    if base_role not in {"ADMIN", "MANAGER"}:
-        error_response, status = create_error_response(
-            code="FORBIDDEN",
-            message="Only admins and managers can delete proposals",
-            status_code=403,
-        )
-        raise HTTPException(status_code=status, detail=error_response)
-
     await ProposalService(db).delete_proposal(proposal_id)
     return create_response({"deleted": True, "proposal_id": str(proposal_id)})
 

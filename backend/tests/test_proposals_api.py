@@ -214,3 +214,18 @@ def test_delete_proposal_item_recalculates_totals(db):
     assert updated["subtotal_amount"] == 2980
     assert updated["total_amount"] == 2980
     assert updated["items"][0]["commercial_name_snapshot"] == "Premium SLA Monitoring"
+
+
+def test_delete_proposal_returns_deleted_flag(db):
+    user = _seed_user(db)
+    catalog_item = _seed_quotable_catalog_item(db, user)
+    client = _make_client(db, user)
+
+    proposal_response = client.post(f"/api/v1/admin/proposals/from-catalog/{catalog_item.id}", json={})
+    proposal_id = proposal_response.json()["data"]["id"]
+
+    delete_response = client.delete(f"/api/v1/admin/proposals/{proposal_id}")
+    assert delete_response.status_code == 200
+    payload = delete_response.json()["data"]
+    assert payload["deleted"] is True
+    assert payload["proposal_id"] == proposal_id

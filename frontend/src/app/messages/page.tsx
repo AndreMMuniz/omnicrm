@@ -1273,7 +1273,7 @@ export default function ChatPage() {
     activateConversation,
   } = useMessagesSessionContext();
   const canDeleteConversations = Boolean(user?.user_type?.can_delete_conversations);
-  const canDeleteProposals = user?.user_type?.base_role === 'ADMIN' || user?.user_type?.base_role === 'MANAGER';
+  const canDeleteProposals = Boolean(user);
 
   // Story 3.3 — sort by SLA risk: breached first, then by wait time desc
   const sortedConversations = [...conversations].sort((a, b) => {
