@@ -176,7 +176,7 @@ async def delete_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    deleted = await ProjectService(db).projects.delete(project_id)
+    deleted = await ProjectService(db).delete_project(project_id)
     if not deleted:
         error_response, status = create_error_response(
             code="PROJECT_NOT_FOUND",

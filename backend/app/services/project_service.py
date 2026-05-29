@@ -192,6 +192,26 @@ class ProjectService:
         updated = await self.projects.update(project.id, {"stage": stage_key})
         return await self.projects.find_project(updated.id)
 
+    async def delete_project(self, project_id: UUID) -> bool:
+        project = await self.projects.find_project(project_id)
+        if not project:
+            return False
+
+        (
+            self.db.query(Conversation)
+            .filter(Conversation.project_context_id == project_id)
+            .update({"project_context_id": None}, synchronize_session=False)
+        )
+        (
+            self.db.query(Project)
+            .filter(Project.project_context_id == project_id)
+            .update({"project_context_id": None}, synchronize_session=False)
+        )
+
+        self.db.delete(project)
+        self.db.commit()
+        return True
+
     async def create_project_from_message(
         self,
         message_id: UUID,

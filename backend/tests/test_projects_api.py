@@ -200,6 +200,57 @@ def test_update_move_stage_and_delete_project(db):
     assert delete_response.json()["data"]["deleted"] is True
 
 
+def test_delete_project_clears_conversation_and_child_project_references(db):
+    user = _seed_user_and_stages(db)
+    contact = Contact(name="Delete Context Contact")
+    db.add(contact)
+    db.flush()
+
+    parent_project = Project(
+        title="Parent project",
+        description="Context root",
+        stage="lead",
+        priority=ProjectPriority.MEDIUM,
+        status=ProjectStatus.OPEN,
+        source_type=ProjectSourceType.MANUAL,
+        created_by_user_id=user.id,
+    )
+    db.add(parent_project)
+    db.flush()
+
+    child_project = Project(
+        title="Child project",
+        description="Nested context",
+        stage="qualification",
+        priority=ProjectPriority.MEDIUM,
+        status=ProjectStatus.OPEN,
+        source_type=ProjectSourceType.MANUAL,
+        created_by_user_id=user.id,
+        project_context_id=parent_project.id,
+    )
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+        project_context_id=parent_project.id,
+    )
+    db.add_all([child_project, conversation])
+    db.commit()
+
+    client = _make_client(db, user)
+
+    delete_response = client.delete(f"/api/v1/admin/projects/{parent_project.id}")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["data"]["deleted"] is True
+
+    db.refresh(child_project)
+    db.refresh(conversation)
+    assert child_project.project_context_id is None
+    assert conversation.project_context_id is None
+    assert db.query(Project).filter(Project.id == parent_project.id).first() is None
+
+
 def test_create_list_and_update_project_tasks(db):
     user = _seed_user_and_stages(db)
     project = Project(
