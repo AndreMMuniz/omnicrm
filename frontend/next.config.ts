@@ -1,4 +1,7 @@
+import { withVisualEdit as withBefreeVisualEdit } from 'befree-visual-edit/next';
+
 import type { NextConfig } from "next";
+import path from "node:path";
 
 function buildRemotePatterns() {
   const patterns: NonNullable<NextConfig["images"]>["remotePatterns"] = [
@@ -28,9 +31,12 @@ function buildRemotePatterns() {
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  turbopack: {
+    root: path.join(__dirname),
+  },
   images: {
     remotePatterns: buildRemotePatterns(),
   },
 };
 
-export default nextConfig;
+export default withBefreeVisualEdit(nextConfig);

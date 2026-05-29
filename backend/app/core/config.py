@@ -10,9 +10,12 @@ class Settings(BaseModel):
 
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+    DATABASE_ENCRYPTION_KEY: str = os.getenv("DATABASE_ENCRYPTION_KEY", "")
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
     SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    AUTH_MODE: str = os.getenv("AUTH_MODE", "supabase").strip().lower()
+    LOCAL_AUTH_SECRET: str = os.getenv("LOCAL_AUTH_SECRET", "")
 
     # AI — supports both OPENAI_API_KEY and OPENROUTER_API_KEY
     # When using OpenRouter, set OPENROUTER_API_KEY (preferred) or OPENAI_API_KEY
@@ -48,5 +51,18 @@ class Settings(BaseModel):
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
+
+    @property
+    def use_local_auth(self) -> bool:
+        return self.AUTH_MODE == "local"
+
+    @property
+    def local_auth_secret(self) -> str:
+        return (
+            self.LOCAL_AUTH_SECRET
+            or self.DATABASE_ENCRYPTION_KEY
+            or self.DATABASE_HMAC_KEY
+            or "local-dev-auth-secret"
+        )
 
 settings = Settings()

@@ -3,14 +3,22 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session, joinedload
 from slowapi.util import get_remote_address
+from app.core.config import settings as app_settings
 from app.core.database import get_db, get_supabase
 from app.core.limiter import limiter
+from app.core.local_auth import (
+    decode_token,
+    hash_password,
+    issue_access_token,
+    issue_refresh_token,
+    new_local_auth_id,
+    verify_password,
+)
 from app.models.models import User, UserType
 from app.schemas.user import UserResponse, UserSignup
 from app.schemas.common import create_response, create_error_response
 from app.api.endpoints.users import seed_default_user_types
 from app.repositories import RepositoryFactory, get_repositories
-from app.core.config import settings as app_settings
 
 router = APIRouter()
 
@@ -58,8 +66,39 @@ class LoginResponse(BaseModel):
 
 @router.post("/login")
 @limiter.limit("10/minute", key_func=get_remote_address)
-async def login(data: LoginRequest, request: Request, response: Response, repos: RepositoryFactory = Depends(get_repositories)) -> Dict[str, Any]:
-    """Authenticate via Supabase, set HttpOnly cookies and return tokens."""
+async def login(
+    data: LoginRequest,
+    request: Request,
+    response: Response,
+    repos: RepositoryFactory = Depends(get_repositories),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Authenticate using the configured auth backend, set HttpOnly cookies and return tokens."""
+    if app_settings.use_local_auth:
+        user = (
+            db.query(User)
+            .options(joinedload(User.user_type))
+            .filter(User.email == data.email)
+            .first()
+        )
+        if not user or not verify_password(data.password, user.local_password_hash):
+            error_response, status = create_error_response(
+                code="INVALID_CREDENTIALS",
+                message="Invalid email or password",
+                status_code=401
+            )
+            raise HTTPException(status_code=status, detail=error_response)
+
+        _ensure_user_can_login(user)
+        access_token = issue_access_token(user.auth_id)
+        refresh_token = issue_refresh_token(user.auth_id)
+        _set_auth_cookies(response, access_token, refresh_token)
+        return create_response({
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "user": UserResponse.model_validate(user)
+        })
+
     supabase = get_supabase()
 
     try:
@@ -122,21 +161,7 @@ async def login(data: LoginRequest, request: Request, response: Response, repos:
             )
             raise HTTPException(status_code=status, detail=error_response)
 
-    if not user.is_approved:
-        error_response, status = create_error_response(
-            code="USER_NOT_APPROVED",
-            message="Account pending admin approval. You will be notified by email when approved.",
-            status_code=403
-        )
-        raise HTTPException(status_code=status, detail=error_response)
-
-    if not user.is_active:
-        error_response, status = create_error_response(
-            code="USER_DISABLED",
-            message="Account is disabled. Contact an administrator.",
-            status_code=403
-        )
-        raise HTTPException(status_code=status, detail=error_response)
+    _ensure_user_can_login(user)
 
     _set_auth_cookies(response, auth_response.session.access_token, auth_response.session.refresh_token)
 
@@ -172,6 +197,37 @@ async def signup(data: UserSignup, request: Request, repos: RepositoryFactory = 
             status_code=500
         )
         raise HTTPException(status_code=status, detail=error_response)
+
+    if app_settings.use_local_auth:
+        user_count = db.query(User).count()
+        is_first_user = user_count == 0
+        assigned_role = default_role
+        if is_first_user:
+            assigned_role = (
+                db.query(UserType)
+                .filter(UserType.name == "Admin", UserType.is_system == True)
+                .first()
+                or default_role
+            )
+
+        user = await repos.users.create({
+            "auth_id": new_local_auth_id(),
+            "email": data.email,
+            "full_name": data.full_name,
+            "user_type_id": assigned_role.id,
+            "is_active": is_first_user,
+            "is_approved": is_first_user,
+            "local_password_hash": hash_password(data.password),
+        })
+        detail = (
+            "First local account created with admin access."
+            if is_first_user
+            else "Account created. An administrator will review your request and notify you by email."
+        )
+        return create_response({
+            "detail": detail,
+            "user": UserResponse.model_validate(user),
+        })
 
     supabase = get_supabase()
     try:
@@ -229,6 +285,14 @@ async def forgot_password(data: dict, request: Request) -> Dict[str, Any]:
         )
         raise HTTPException(status_code=status, detail=error_response)
 
+    if app_settings.use_local_auth:
+        error_response, status = create_error_response(
+            code="UNSUPPORTED_IN_LOCAL_AUTH",
+            message="Password reset by email is unavailable in local auth mode. Use the admin password reset instead.",
+            status_code=400
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
     supabase = get_supabase()
     try:
         supabase.auth.reset_password_for_email(email, {
@@ -253,6 +317,14 @@ async def set_password(data: SetPasswordRequest, request: Request, repos: Reposi
     """Set a new password using a Supabase recovery token.
     Auto-creates the local user record if the email was registered directly in Supabase.
     """
+    if app_settings.use_local_auth:
+        error_response, status = create_error_response(
+            code="UNSUPPORTED_IN_LOCAL_AUTH",
+            message="Recovery-link password reset is unavailable in local auth mode. Use the admin password reset instead.",
+            status_code=400
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         error_response, status = create_error_response(
@@ -339,6 +411,26 @@ async def refresh_token(request: Request, response: Response) -> Dict[str, Any]:
         )
         raise HTTPException(status_code=status, detail=error_response)
 
+    if app_settings.use_local_auth:
+        try:
+            claims = decode_token(token, expected_type="refresh")
+        except ValueError:
+            _clear_auth_cookies(response)
+            error_response, status = create_error_response(
+                code="TOKEN_EXPIRED",
+                message="Invalid refresh token",
+                status_code=401
+            )
+            raise HTTPException(status_code=status, detail=error_response)
+
+        access_token = issue_access_token(claims["sub"])
+        refresh_token_value = issue_refresh_token(claims["sub"])
+        _set_auth_cookies(response, access_token, refresh_token_value)
+        return create_response({
+            "access_token": access_token,
+            "refresh_token": refresh_token_value,
+        })
+
     supabase = get_supabase()
     try:
         auth_response = supabase.auth.refresh_session(token)
@@ -353,5 +445,23 @@ async def refresh_token(request: Request, response: Response) -> Dict[str, Any]:
             code="TOKEN_EXPIRED",
             message="Invalid refresh token",
             status_code=401
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+
+def _ensure_user_can_login(user: User) -> None:
+    if not user.is_approved:
+        error_response, status = create_error_response(
+            code="USER_NOT_APPROVED",
+            message="Account pending admin approval. You will be notified by email when approved.",
+            status_code=403
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+    if not user.is_active:
+        error_response, status = create_error_response(
+            code="USER_DISABLED",
+            message="Account is disabled. Contact an administrator.",
+            status_code=403
         )
         raise HTTPException(status_code=status, detail=error_response)

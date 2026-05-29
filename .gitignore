@@ -117,6 +117,10 @@ $RECYCLE.BIN/
 
 # ─── Docker (local overrides only) ────────────────────────────────────────────
 docker-compose.override.yml
+docker-compose.dev.yml
+backend/.env.docker.dev
+backend/.env.docker.dev.local
+/package.json
 
 #-----------------graphfyignore-----------------
 /graphify-out
@@ -136,4 +140,4 @@ _bmad-output/
 makefile
 Makefile
 CLAUDE.md
-
+CLAUDE copy.md

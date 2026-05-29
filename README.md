@@ -87,6 +87,25 @@ python main.py
 
 The API runs at `http://localhost:8000` and the interactive docs at `http://localhost:8000/docs`.
 
+### Backend Docker Dev
+
+For a local-only backend that does not reuse the production-oriented `backend/.env`, use the dedicated Docker dev stack:
+
+```bash
+npm run backend:dev:up
+```
+
+This starts:
+
+- `chat-multi-channel-postgres-dev` on `localhost:5433`
+- `chat-multi-channel-backend-dev` on `localhost:8000`
+
+The stack uses `backend/.env.docker.dev`, which is meant for local development only and keeps webhooks, AI keys, and real Supabase integration disabled by default. To stop it:
+
+```bash
+npm run backend:dev:down
+```
+
 ### Frontend
 
 ```bash

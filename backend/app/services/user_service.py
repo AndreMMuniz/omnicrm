@@ -9,8 +9,10 @@ from typing import Optional
 from uuid import UUID
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import settings
 from app.core.database import get_supabase
 from app.core.email import send_approval_email
+from app.core.local_auth import hash_password, new_local_auth_id
 from app.models.models import User, UserType, DefaultRole, AuditLog, Conversation, Message
 from app.repositories import RepositoryFactory
 from app.services.audit_service import log_action
@@ -97,19 +99,23 @@ class UserService:
         actor_id: Optional[UUID] = None,
         ip_address: Optional[str] = None,
     ) -> User:
-        """Create user in Supabase Auth + local DB. Returns the new User."""
-        auth_response = self.supabase.auth.admin.create_user({
-            "email": email,
-            "password": password,
-            "email_confirm": True,
-        })
-        auth_id = str(auth_response.user.id)
+        """Create user in the configured auth backend + local DB. Returns the new User."""
+        auth_id = new_local_auth_id()
+        local_password_hash = hash_password(password) if settings.use_local_auth else None
+        if not settings.use_local_auth:
+            auth_response = self.supabase.auth.admin.create_user({
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+            })
+            auth_id = str(auth_response.user.id)
 
         user = User(
             auth_id=auth_id,
             email=email,
             full_name=full_name,
             avatar=avatar,
+            local_password_hash=local_password_hash,
             user_type_id=user_type_id,
             is_active=is_active,
             is_approved=is_approved,
@@ -178,10 +184,11 @@ class UserService:
             log_action(self.db, actor_id, "delete_user", "user", str(user.id),
                        details={"email": user.email}, ip_address=ip_address)
 
-        try:
-            self.supabase.auth.admin.delete_user(user.auth_id)
-        except Exception:
-            pass  # proceed even if Supabase deletion fails
+        if not settings.use_local_auth:
+            try:
+                self.supabase.auth.admin.delete_user(user.auth_id)
+            except Exception:
+                pass  # proceed even if Supabase deletion fails
 
         self.db.delete(user)
         self.db.commit()
@@ -213,10 +220,11 @@ class UserService:
         if actor_id:
             log_action(self.db, actor_id, "reject_user", "user", str(user.id),
                        details={"email": user.email}, ip_address=ip_address)
-        try:
-            self.supabase.auth.admin.delete_user(user.auth_id)
-        except Exception:
-            pass
+        if not settings.use_local_auth:
+            try:
+                self.supabase.auth.admin.delete_user(user.auth_id)
+            except Exception:
+                pass
         self.db.delete(user)
         self.db.commit()
 
@@ -253,7 +261,12 @@ class UserService:
         actor_id: Optional[UUID] = None,
         ip_address: Optional[str] = None,
     ) -> None:
-        self.supabase.auth.admin.update_user_by_id(user.auth_id, {"password": new_password})
+        if settings.use_local_auth:
+            user.local_password_hash = hash_password(new_password)
+            self.db.commit()
+            self.db.refresh(user)
+        else:
+            self.supabase.auth.admin.update_user_by_id(user.auth_id, {"password": new_password})
         if actor_id:
             log_action(self.db, actor_id, "change_user_password", "user", str(user.id),
                        ip_address=ip_address)

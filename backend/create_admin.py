@@ -28,7 +28,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
+from app.core.config import settings
 from app.core.database import SessionLocal, get_supabase
+from app.core.local_auth import hash_password, new_local_auth_id
 from app.models.models import User, UserType, DefaultRole
 
 
@@ -120,21 +122,27 @@ def main():
             print(f"  [ERROR] A user with email '{email}' already exists.")
             sys.exit(1)
 
-        # 3. Create Supabase Auth user
-        print("  -> Creating Supabase Auth account...")
-        supabase = get_supabase()
-        try:
-            auth_response = supabase.auth.admin.create_user({
-                "email": email,
-                "password": password,
-                "email_confirm": True,  # auto-confirm so the user can log in immediately
-            })
-        except Exception as e:
-            print(f"  [ERROR] Supabase Auth error: {e}")
-            sys.exit(1)
+        local_password_hash = None
+        if settings.use_local_auth:
+            print("  -> Creating local auth account...")
+            auth_id = new_local_auth_id()
+            local_password_hash = hash_password(password)
+            print(f"  [OK] Local auth user created (auth_id: {auth_id[:14]}...)")
+        else:
+            print("  -> Creating Supabase Auth account...")
+            supabase = get_supabase()
+            try:
+                auth_response = supabase.auth.admin.create_user({
+                    "email": email,
+                    "password": password,
+                    "email_confirm": True,  # auto-confirm so the user can log in immediately
+                })
+            except Exception as e:
+                print(f"  [ERROR] Supabase Auth error: {e}")
+                sys.exit(1)
 
-        auth_id = str(auth_response.user.id)
-        print(f"  [OK] Supabase user created (auth_id: {auth_id[:8]}...)")
+            auth_id = str(auth_response.user.id)
+            print(f"  [OK] Supabase user created (auth_id: {auth_id[:8]}...)")
 
         # 4. Create local profile
         print("  -> Inserting user profile in database...")
@@ -142,6 +150,7 @@ def main():
             auth_id=auth_id,
             email=email,
             full_name=fullname,
+            local_password_hash=local_password_hash,
             user_type_id=admin_type.id,
             is_active=True,
         )

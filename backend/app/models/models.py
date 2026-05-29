@@ -175,6 +175,7 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False)
     full_name = Column(String(255), nullable=False)
     avatar = Column(String, nullable=True)
+    local_password_hash = Column(String(512), nullable=True)
 
     user_type_id = Column(UUID(as_uuid=True), ForeignKey("user_types.id"), nullable=False)
     is_active = Column(Boolean, default=True)

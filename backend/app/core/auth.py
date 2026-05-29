@@ -3,7 +3,9 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
+from app.core.config import settings
 from app.core.database import get_db, get_supabase
+from app.core.local_auth import decode_token
 from app.models.models import User, UserType
 
 security = HTTPBearer(auto_error=False)
@@ -14,23 +16,29 @@ async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
 ) -> User:
-    """Verify Supabase JWT from HttpOnly cookie or Authorization header."""
+    """Verify the configured auth token from HttpOnly cookie or Authorization header."""
     token = credentials.credentials if credentials else None
     if not token:
         token = request.cookies.get("access_token")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
-    supabase = get_supabase()
-    try:
-        auth_response = supabase.auth.get_user(token)
-        if not auth_response or not auth_response.user:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-        auth_id = auth_response.user.id
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    if settings.use_local_auth:
+        try:
+            auth_id = decode_token(token, expected_type="access")["sub"]
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    else:
+        supabase = get_supabase()
+        try:
+            auth_response = supabase.auth.get_user(token)
+            if not auth_response or not auth_response.user:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            auth_id = auth_response.user.id
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
     user = (
         db.query(User)
