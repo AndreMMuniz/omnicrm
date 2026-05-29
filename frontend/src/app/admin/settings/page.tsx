@@ -331,7 +331,7 @@ export default function SettingsPage() {
                   >
                     <Field label="Backend Base URL" hint="Used as the base for webhook registration and channel callbacks">
                       <div className="flex h-11 items-center rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
-                        {backendUrl}
+                        {backendOrigin}
                       </div>
                     </Field>
                     <Field label="WhatsApp Webhook URL" hint="Copy this URL into your Meta App Webhooks configuration">
