@@ -198,8 +198,9 @@ export default function SettingsPage() {
   const whatsappConfigured = !!(s.whatsapp_phone_id && s.whatsapp_access_token);
   const emailConfigured = !!(s.email_address && s.email_password);
   const smsConfigured = !!(s.twilio_account_sid && s.twilio_auth_token);
-  const backendUrl = process.env.NEXT_PUBLIC_API_URL ?? "https://your-backend.railway.app";
-  const whatsappWebhookUrl = `${backendUrl}/api/v1/whatsapp/webhook`;
+  const backendApiUrl = process.env.NEXT_PUBLIC_API_URL ?? "https://your-backend.railway.app/api/v1";
+  const backendOrigin = backendApiUrl.replace(/\/api\/v1\/?$/, "");
+  const whatsappWebhookUrl = `${backendOrigin}/api/v1/whatsapp/webhook`;
   return (
     <ConfigAreaShell
       activeSection={activeTab}

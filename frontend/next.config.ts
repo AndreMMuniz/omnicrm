@@ -37,6 +37,19 @@ const nextConfig: NextConfig = {
   images: {
     remotePatterns: buildRemotePatterns(),
   },
+  async rewrites() {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (!apiUrl) return [];
+
+    const destinationBase = apiUrl.replace(/\/api\/v1\/?$/, "");
+
+    return [
+      {
+        source: "/api/v1/:path*",
+        destination: `${destinationBase}/api/v1/:path*`,
+      },
+    ];
+  },
 };
 
 export default withBefreeVisualEdit(nextConfig);

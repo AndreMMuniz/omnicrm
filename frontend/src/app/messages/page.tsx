@@ -99,95 +99,6 @@ function ConversationOwnerBadge({
   );
 }
 
-function InboxOwnerSelect({
-  conversation,
-  agents,
-  onAssign,
-}: {
-  conversation: Conversation;
-  agents: { id: string; full_name: string }[];
-  onAssign: (userId: string | null) => Promise<void>;
-}) {
-  const [saving, setSaving] = useLocalState(false);
-
-  const handleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    e.stopPropagation();
-    setSaving(true);
-    await onAssign(e.target.value || null).catch(() => {});
-    setSaving(false);
-  };
-
-  return (
-    <div
-      className="flex items-center gap-1.5"
-      onClick={(event) => event.stopPropagation()}
-      onMouseDown={(event) => event.stopPropagation()}
-    >
-      <select
-        value={conversation.assigned_user_id ?? ""}
-        onChange={handleChange}
-        disabled={saving}
-        className="h-7 max-w-[132px] rounded-full border border-slate-200 bg-white px-2 text-[10px] font-medium text-slate-600 outline-none transition focus:border-indigo-300"
-      >
-        <option value="">Unassigned</option>
-        {agents.map((agent) => (
-          <option key={agent.id} value={agent.id}>
-            {agent.full_name}
-          </option>
-        ))}
-      </select>
-      {saving ? (
-        <span className="material-symbols-outlined text-[13px] text-slate-400 animate-spin">progress_activity</span>
-      ) : null}
-    </div>
-  );
-}
-
-function InboxStatusSelect({
-  conversation,
-  onChange,
-}: {
-  conversation: Conversation;
-  onChange: (status: ConversationStatus) => Promise<void>;
-}) {
-  const [saving, setSaving] = useLocalState(false);
-
-  const handleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    e.stopPropagation();
-    setSaving(true);
-    await onChange(e.target.value as ConversationStatus).catch(() => {});
-    setSaving(false);
-  };
-
-  return (
-    <div
-      className="flex items-center gap-1.5"
-      onClick={(event) => event.stopPropagation()}
-      onMouseDown={(event) => event.stopPropagation()}
-    >
-      <select
-        value={conversation.status}
-        onChange={handleChange}
-        disabled={saving}
-        className={cn(
-          "h-7 rounded-full border px-2 text-[10px] font-semibold outline-none transition",
-          getConversationStatusMeta(conversation.status).selectClassName
-        )}
-      >
-        {STATUS_OPTIONS.map((status) => (
-          <option key={status} value={status}>
-            {getConversationStatusMeta(status).label}
-          </option>
-        ))}
-      </select>
-      {saving ? (
-        <span className="material-symbols-outlined text-[13px] text-slate-400 animate-spin">progress_activity</span>
-      ) : null}
-    </div>
-  );
-}
-
-
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -2144,11 +2055,10 @@ export default function ChatPage() {
                         </span>
                       </div>
                     </div>
-                    {/* Tag + SLA row */}
+                    {/* Channel + tag row */}
                     <div className="flex items-center gap-1 mb-0.5 flex-wrap">
-                      <ConversationStatusBadge status={conv.status} />
+                      <ChannelBadge channel={conv.channel} compact />
                       <TagBadge tags={conv.tags} />
-                      <ConversationOwnerBadge conversation={conv} />
                       {sla && (
                         <span className="inline-flex items-center gap-[1px] text-[9px] font-bold text-[#ef4444]">
                           <span className="material-symbols-outlined text-[10px]" style={{ fontVariationSettings: "'FILL' 1" }}>warning</span>
@@ -2156,23 +2066,10 @@ export default function ChatPage() {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="min-w-0 text-[12px] truncate"
-                        style={{ color: conv.is_unread ? '#374151' : '#94a3b8', fontWeight: conv.is_unread ? 500 : 400 }}>
-                        {conv.last_message || 'No messages'}
-                      </p>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <InboxStatusSelect
-                          conversation={conv}
-                          onChange={(status) => updateConversation(conv.id, { status })}
-                        />
-                        <InboxOwnerSelect
-                          conversation={conv}
-                          agents={assignableUsers}
-                          onAssign={(userId) => assignConversationOwner(conv.id, userId)}
-                        />
-                      </div>
-                    </div>
+                    <p className="min-w-0 text-[12px] truncate"
+                      style={{ color: conv.is_unread ? '#374151' : '#94a3b8', fontWeight: conv.is_unread ? 500 : 400 }}>
+                      {conv.last_message || 'No messages'}
+                    </p>
                   </div>
                 </div>
               );

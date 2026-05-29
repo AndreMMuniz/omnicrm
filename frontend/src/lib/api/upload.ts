@@ -2,7 +2,7 @@
 
 import { getToken } from "@/lib/api";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const BASE = "/api/v1";
 
 export async function uploadFile(file: File | Blob, filename?: string): Promise<string> {
   const formData = new FormData();

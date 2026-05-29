@@ -3,7 +3,7 @@
 import { apiFetch, setAuth, clearAuth } from "@/lib/api";
 import type { AuthPayload } from "@/types/auth";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const BASE = "/api/v1";
 
 /**
  * Extract human-readable error message from FastAPI responses.

@@ -1,4 +1,4 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+const BASE = "/api/v1";
 
 const TOKEN_KEY = 'auth_token';
 const USER_KEY = 'auth_user';
