@@ -2128,7 +2128,6 @@ export default function ChatPage() {
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                       <ChannelBadge channel={activeConversation.channel} compact />
                       <TagBadge tags={activeConversation.tags} />
-                      <ConversationOwnerBadge conversation={activeConversation} />
                       {(() => {
                         const wt = waitingTime(activeConversation.last_message_date, activeConversation.is_unread);
                         if (!wt?.slaBreached) return null;
