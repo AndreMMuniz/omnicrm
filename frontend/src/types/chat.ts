@@ -77,6 +77,32 @@ export interface CustomerTimeline {
   events: CustomerTimelineEvent[];
 }
 
+export interface ConversationLinkedArtifact {
+  id: string;
+  entity_type: "proposal" | "project";
+  reference: string;
+  title: string;
+  status: string;
+  origin_type: "conversation_context" | "message_action" | "client_relationship" | "derived_context";
+  updated_at: string;
+  source_message_id?: string | null;
+  source_conversation_id?: string | null;
+  href: string;
+}
+
+export interface ConversationLinkedArtifactGap {
+  code: string;
+  title: string;
+  description: string;
+}
+
+export interface ConversationLinkedArtifacts {
+  conversation_id: string;
+  client_id?: string | null;
+  artifacts: ConversationLinkedArtifact[];
+  gaps: ConversationLinkedArtifactGap[];
+}
+
 export interface ClientMatch extends ClientSummary {
   match_field: "linked";
 }

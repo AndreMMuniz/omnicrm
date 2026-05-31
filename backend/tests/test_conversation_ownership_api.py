@@ -822,6 +822,155 @@ def test_get_conversation_timeline_includes_other_client_conversations_when_link
     assert any(event["description"] == "Secondary conversation note" for event in payload["events"])
 
 
+def test_get_conversation_linked_artifacts_surfaces_direct_and_client_relationships(db):
+    from datetime import datetime, timedelta, timezone
+
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    _seed_project_stage(db, "lead", "Lead", 1)
+
+    linked_client = Client(
+        name="Acme",
+        company_name="Acme Corp",
+        country="BR",
+        client_type="company",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(linked_client)
+    db.flush()
+
+    contact = Contact(
+        name="Ana",
+        email="ana@acme.com",
+        phone="+5511888888888",
+        channel_identifier="ana-acme",
+        client_id=linked_client.id,
+    )
+    db.add(contact)
+    db.flush()
+
+    base_time = datetime.now(timezone.utc) - timedelta(days=1)
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+        created_at=base_time,
+        updated_at=base_time,
+    )
+    db.add(conversation)
+    db.flush()
+
+    source_message = Message(
+        conversation_id=conversation.id,
+        content="Please convert this thread into a project",
+        inbound=True,
+        is_internal=False,
+        created_at=base_time + timedelta(minutes=20),
+    )
+    db.add(source_message)
+    db.flush()
+
+    current_project = Project(
+        title="Implementation rollout",
+        description="Scoped delivery project",
+        stage="lead",
+        status=ProjectStatus.OPEN,
+        priority=ProjectPriority.HIGH,
+        source_type=ProjectSourceType.MANUAL,
+        client_id=linked_client.id,
+        contact_id=contact.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=1),
+        updated_at=base_time + timedelta(hours=3),
+    )
+    db.add(current_project)
+    db.flush()
+    conversation.project_context_id = current_project.id
+
+    message_project = Project(
+        title="Follow-up workstream",
+        description="Created from the inbound request",
+        stage="lead",
+        status=ProjectStatus.OPEN,
+        priority=ProjectPriority.MEDIUM,
+        source_type=ProjectSourceType.MESSAGE,
+        source_message_id=source_message.id,
+        source_conversation_id=conversation.id,
+        client_id=linked_client.id,
+        contact_id=contact.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=2),
+        updated_at=base_time + timedelta(hours=4),
+    )
+    client_project = Project(
+        title="Account expansion",
+        description="Visible from the client relationship only",
+        stage="lead",
+        status=ProjectStatus.DONE,
+        priority=ProjectPriority.LOW,
+        source_type=ProjectSourceType.MANUAL,
+        client_id=linked_client.id,
+        contact_id=contact.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=3),
+        updated_at=base_time + timedelta(hours=5),
+    )
+    proposal = Proposal(
+        title="Renewal proposal",
+        customer_name="Acme",
+        status=ProposalStatus.SENT,
+        total_amount=150000,
+        client_id=linked_client.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=1),
+        updated_at=base_time + timedelta(hours=6),
+    )
+    db.add_all([message_project, client_project, proposal])
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/chat/conversations/{conversation.id}/linked-artifacts")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    artifacts = payload["artifacts"]
+    origins_by_reference = {artifact["reference"]: artifact["origin_type"] for artifact in artifacts}
+
+    assert origins_by_reference[current_project.reference_code] == "conversation_context"
+    assert origins_by_reference[message_project.reference_code] == "message_action"
+    assert origins_by_reference[client_project.reference_code] == "client_relationship"
+    assert origins_by_reference[proposal.reference_code] == "client_relationship"
+    assert payload["gaps"] == []
+
+
+def test_get_conversation_linked_artifacts_surfaces_missing_linkage_gaps(db):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client", email="client@example.com", phone="+5511999999999", channel_identifier="client-001")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WEB,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/chat/conversations/{conversation.id}/linked-artifacts")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["artifacts"] == []
+    assert {gap["code"] for gap in payload["gaps"]} == {
+        "missing_client_link",
+        "missing_project_context",
+    }
+
+
 def test_get_client_timeline_includes_conversation_and_related_records(db):
     from datetime import datetime, timedelta, timezone
 

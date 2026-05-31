@@ -124,6 +124,32 @@ class CustomerTimelineResponse(BaseModel):
     events: List[CustomerTimelineEventResponse] = Field(default_factory=list)
 
 
+class ConversationLinkedArtifactResponse(BaseModel):
+    id: UUID
+    entity_type: str
+    reference: str
+    title: str
+    status: str
+    origin_type: str
+    updated_at: datetime
+    source_message_id: Optional[UUID] = None
+    source_conversation_id: Optional[UUID] = None
+    href: str
+
+
+class ConversationLinkedArtifactGapResponse(BaseModel):
+    code: str
+    title: str
+    description: str
+
+
+class ConversationLinkedArtifactsResponse(BaseModel):
+    conversation_id: UUID
+    client_id: Optional[UUID] = None
+    artifacts: List[ConversationLinkedArtifactResponse] = Field(default_factory=list)
+    gaps: List[ConversationLinkedArtifactGapResponse] = Field(default_factory=list)
+
+
 class AssignedUserSlim(BaseModel):
     id: UUID
     full_name: str

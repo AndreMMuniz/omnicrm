@@ -8,11 +8,12 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.models import Client, Conversation, Message, Project, Proposal, User
-from app.services.customer_timeline_service import build_conversation_timeline
+from app.services.customer_timeline_service import build_conversation_linked_artifacts, build_conversation_timeline
 from app.schemas.chat import (
     AISuggestionResponse,
     AssignedUserSlim,
     ConversationAssignmentUpdate,
+    ConversationLinkedArtifactsResponse,
     ConversationCustomerContextResponse,
     CustomerTimelineResponse,
     ConversationResponse,
@@ -357,6 +358,42 @@ async def get_conversation_context(
 
     context = _load_conversation_customer_context(db, conversation)
     return create_response(context)
+
+
+@router.get("/conversations/{conversation_id}/linked-artifacts")
+@limiter.limit("60/minute")
+async def get_conversation_linked_artifacts(
+    request: Request,
+    conversation_id: UUID,
+    limit: int = 8,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    conversation = (
+        _conversation_query(db, eager=True)
+        .options(joinedload(Conversation.contact))
+        .filter(Conversation.id == conversation_id)
+        .first()
+    )
+    if not conversation:
+        error_response, status = create_error_response(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+            status_code=404,
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+    if not _can_operate_conversation(current_user, conversation):
+        error_response, status = create_error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to view linked artifacts for this conversation",
+            details={"conversation_id": str(conversation_id)},
+            status_code=403,
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
+    linked_artifacts = build_conversation_linked_artifacts(db, conversation, limit=max(1, min(limit, 12)))
+    return create_response(ConversationLinkedArtifactsResponse.model_validate(linked_artifacts))
 
 
 @router.get("/conversations/{conversation_id}/timeline")

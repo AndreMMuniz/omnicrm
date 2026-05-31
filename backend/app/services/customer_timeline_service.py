@@ -6,7 +6,13 @@ from uuid import UUID
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.models import Client, Contact, Conversation, Message, Project, Proposal, ProposalStatusHistory
-from app.schemas.chat import CustomerTimelineEventResponse, CustomerTimelineResponse
+from app.schemas.chat import (
+    ConversationLinkedArtifactGapResponse,
+    ConversationLinkedArtifactResponse,
+    ConversationLinkedArtifactsResponse,
+    CustomerTimelineEventResponse,
+    CustomerTimelineResponse,
+)
 
 
 def _truncate(value: Optional[str], *, limit: int = 160) -> Optional[str]:
@@ -169,6 +175,178 @@ def _proposal_events(db: Session, *, client_id: UUID) -> list[CustomerTimelineEv
     return events
 
 
+def _serialize_status(value: object) -> str:
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _linked_client_for_conversation(db: Session, conversation: Conversation) -> Optional[Client]:
+    contact = conversation.contact
+    if not contact or not getattr(contact, "client_id", None):
+        return None
+    return (
+        db.query(Client)
+        .filter(Client.id == contact.client_id, Client.deleted_at.is_(None))
+        .first()
+    )
+
+
+def build_conversation_linked_artifacts(
+    db: Session,
+    conversation: Conversation,
+    *,
+    limit: int = 8,
+) -> ConversationLinkedArtifactsResponse:
+    linked_client = _linked_client_for_conversation(db, conversation)
+
+    project_candidates: dict[str, tuple[Project, str]] = {}
+
+    if conversation.project_context_id:
+        current_project = db.query(Project).filter(Project.id == conversation.project_context_id).first()
+        if current_project:
+            project_candidates[str(current_project.id)] = (current_project, "conversation_context")
+
+    message_action_projects = (
+        db.query(Project)
+        .join(Message, Message.id == Project.source_message_id)
+        .filter(Message.conversation_id == conversation.id)
+        .order_by(Project.updated_at.desc())
+        .all()
+    )
+    for project in message_action_projects:
+        existing = project_candidates.get(str(project.id))
+        if not existing:
+            project_candidates[str(project.id)] = (project, "message_action")
+
+    direct_projects = (
+        db.query(Project)
+        .filter(Project.source_conversation_id == conversation.id)
+        .order_by(Project.updated_at.desc())
+        .all()
+    )
+    for project in direct_projects:
+        existing = project_candidates.get(str(project.id))
+        if not existing:
+            project_candidates[str(project.id)] = (project, "derived_context")
+
+    if linked_client:
+        client_projects = (
+            db.query(Project)
+            .filter(Project.client_id == linked_client.id)
+            .order_by(Project.updated_at.desc())
+            .limit(limit)
+            .all()
+        )
+        for project in client_projects:
+            existing = project_candidates.get(str(project.id))
+            if not existing:
+                project_candidates[str(project.id)] = (project, "client_relationship")
+
+    proposal_artifacts: list[ConversationLinkedArtifactResponse] = []
+    if linked_client:
+        proposals = (
+            db.query(Proposal)
+            .filter(Proposal.client_id == linked_client.id)
+            .order_by(Proposal.updated_at.desc())
+            .limit(limit)
+            .all()
+        )
+        proposal_artifacts = [
+            ConversationLinkedArtifactResponse(
+                id=proposal.id,
+                entity_type="proposal",
+                reference=proposal.reference_code,
+                title=proposal.title,
+                status=_serialize_status(proposal.status),
+                origin_type="client_relationship",
+                updated_at=proposal.updated_at,
+                href=f"/proposals?proposalId={proposal.id}",
+            )
+            for proposal in proposals
+        ]
+
+    project_origin_order = {
+        "conversation_context": 0,
+        "message_action": 1,
+        "derived_context": 2,
+        "client_relationship": 3,
+    }
+    project_artifacts = [
+        ConversationLinkedArtifactResponse(
+            id=project.id,
+            entity_type="project",
+            reference=project.reference_code,
+            title=project.title,
+            status=_serialize_status(project.status),
+            origin_type=origin_type,
+            updated_at=project.updated_at,
+            source_message_id=project.source_message_id,
+            source_conversation_id=project.source_conversation_id,
+            href=f"/projects?projectId={project.id}",
+        )
+        for project, origin_type in sorted(
+            project_candidates.values(),
+            key=lambda item: (
+                project_origin_order.get(item[1], 99),
+                -(item[0].updated_at.timestamp() if item[0].updated_at else 0),
+                item[0].reference_code,
+            ),
+        )
+    ]
+
+    artifacts = (project_artifacts[:4] + proposal_artifacts[:4])[: max(1, min(limit, 12))]
+
+    has_direct_artifact = any(
+        artifact.origin_type in {"conversation_context", "message_action", "derived_context"}
+        for artifact in project_artifacts
+    )
+    has_project_context = any(
+        artifact.origin_type == "conversation_context"
+        for artifact in project_artifacts
+    )
+    has_client_proposals = len(proposal_artifacts) > 0
+
+    gaps: list[ConversationLinkedArtifactGapResponse] = []
+    if not linked_client:
+        gaps.append(
+            ConversationLinkedArtifactGapResponse(
+                code="missing_client_link",
+                title="Client link missing",
+                description="Link a client to surface proposal context related to this conversation.",
+            )
+        )
+    if not has_project_context:
+        gaps.append(
+            ConversationLinkedArtifactGapResponse(
+                code="missing_project_context",
+                title="Project context missing",
+                description="This conversation does not have a direct project context attached yet.",
+            )
+        )
+    if linked_client and not has_client_proposals:
+        gaps.append(
+            ConversationLinkedArtifactGapResponse(
+                code="missing_proposal_link",
+                title="No proposal visible yet",
+                description="This linked client does not have proposal context available from this conversation yet.",
+            )
+        )
+    if linked_client and not has_direct_artifact:
+        gaps.append(
+            ConversationLinkedArtifactGapResponse(
+                code="missing_direct_artifact",
+                title="Direct commercial linkage missing",
+                description="This conversation is related to the client, but no project or message-derived artifact is directly attached yet.",
+            )
+        )
+
+    return ConversationLinkedArtifactsResponse(
+        conversation_id=conversation.id,
+        client_id=linked_client.id if linked_client else None,
+        artifacts=artifacts,
+        gaps=gaps,
+    )
+
+
 def _project_events(db: Session, *, client_id: Optional[UUID], project_context_id: Optional[UUID]) -> list[CustomerTimelineEventResponse]:
     project_candidates: dict[str, Project] = {}
     if client_id:
@@ -209,14 +387,7 @@ def _client_conversations(db: Session, *, client_id: UUID, limit: int = 10) -> l
 
 
 def build_conversation_timeline(db: Session, conversation: Conversation, *, limit: int = 25) -> CustomerTimelineResponse:
-    contact = conversation.contact
-    linked_client = None
-    if contact and getattr(contact, "client_id", None):
-        linked_client = (
-            db.query(Client)
-            .filter(Client.id == contact.client_id, Client.deleted_at.is_(None))
-            .first()
-        )
+    linked_client = _linked_client_for_conversation(db, conversation)
 
     conversations: list[Conversation]
     if linked_client:

@@ -7,6 +7,7 @@ import type {
   ClientMatch,
   Conversation,
   ConversationCustomerContext,
+  ConversationLinkedArtifacts,
   CustomerTimeline,
   CreateInternalNoteRequest,
   Message,
@@ -78,6 +79,16 @@ export async function getConversationTimeline(
   if (params?.limit) query.set("limit", String(params.limit));
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return apiGet<CustomerTimeline>(`/chat/conversations/${conversationId}/timeline${suffix}`);
+}
+
+export async function getConversationLinkedArtifacts(
+  conversationId: string,
+  params?: { limit?: number },
+): Promise<ConversationLinkedArtifacts> {
+  const query = new URLSearchParams();
+  if (params?.limit) query.set("limit", String(params.limit));
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiGet<ConversationLinkedArtifacts>(`/chat/conversations/${conversationId}/linked-artifacts${suffix}`);
 }
 
 export async function sendMessage(

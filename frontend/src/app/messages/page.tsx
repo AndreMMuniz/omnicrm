@@ -22,6 +22,9 @@ import type {
   ChannelType,
   Conversation,
   ConversationCustomerContext,
+  ConversationLinkedArtifact,
+  ConversationLinkedArtifacts,
+  ConversationLinkedArtifactGap,
   ConversationStatus,
   ConversationTag,
   CustomerTimeline,
@@ -1132,6 +1135,9 @@ export default function ChatPage() {
   const [customerContext, setCustomerContext] = useState<ConversationCustomerContext | null>(null);
   const [customerContextLoading, setCustomerContextLoading] = useState(false);
   const [customerContextError, setCustomerContextError] = useState<string | null>(null);
+  const [customerLinkedArtifacts, setCustomerLinkedArtifacts] = useState<ConversationLinkedArtifacts | null>(null);
+  const [customerLinkedArtifactsLoading, setCustomerLinkedArtifactsLoading] = useState(false);
+  const [customerLinkedArtifactsError, setCustomerLinkedArtifactsError] = useState<string | null>(null);
   const [customerTimeline, setCustomerTimeline] = useState<CustomerTimeline | null>(null);
   const [customerTimelineLoading, setCustomerTimelineLoading] = useState(false);
   const [customerTimelineError, setCustomerTimelineError] = useState<string | null>(null);
@@ -1199,6 +1205,8 @@ export default function ChatPage() {
   const lastAIFetchedKeyRef = useRef<string | null>(null);
   const customerContextRequestRef = useRef(0);
   const customerContextConversationRef = useRef<string | null>(null);
+  const customerLinkedArtifactsRequestRef = useRef(0);
+  const customerLinkedArtifactsConversationRef = useRef<string | null>(null);
   const customerTimelineRequestRef = useRef(0);
   const customerTimelineConversationRef = useRef<string | null>(null);
 
@@ -1328,12 +1336,40 @@ export default function ChatPage() {
     }
   }, []);
 
+  const refreshConversationLinkedArtifacts = useCallback(async (conversationId: string) => {
+    const requestId = customerLinkedArtifactsRequestRef.current + 1;
+    customerLinkedArtifactsRequestRef.current = requestId;
+    customerLinkedArtifactsConversationRef.current = conversationId;
+
+    const isStaleRequest = () => (
+      customerLinkedArtifactsRequestRef.current !== requestId
+      || customerLinkedArtifactsConversationRef.current !== conversationId
+    );
+
+    setCustomerLinkedArtifactsLoading(true);
+    setCustomerLinkedArtifactsError(null);
+
+    try {
+      const linkedArtifacts = await conversationsApi.getConversationLinkedArtifacts(conversationId, { limit: 8 });
+      if (isStaleRequest()) return;
+      setCustomerLinkedArtifacts(linkedArtifacts);
+    } catch (error) {
+      if (isStaleRequest()) return;
+      setCustomerLinkedArtifactsError(error instanceof Error ? error.message : 'Failed to load linked artifacts.');
+    } finally {
+      if (!isStaleRequest()) {
+        setCustomerLinkedArtifactsLoading(false);
+      }
+    }
+  }, []);
+
   const refreshConversationPanelData = useCallback(async (conversationId: string) => {
     await Promise.all([
       refreshConversationCustomerContext(conversationId),
+      refreshConversationLinkedArtifacts(conversationId),
       refreshConversationTimeline(conversationId),
     ]);
-  }, [refreshConversationCustomerContext, refreshConversationTimeline]);
+  }, [refreshConversationCustomerContext, refreshConversationLinkedArtifacts, refreshConversationTimeline]);
 
   const handleQuickReplyCreate = useCallback(async () => {
     if (!quickReplyModal) return;
@@ -1402,10 +1438,14 @@ export default function ChatPage() {
     if (!activeConversation?.id) {
       customerContextRequestRef.current += 1;
       customerContextConversationRef.current = null;
+      customerLinkedArtifactsRequestRef.current += 1;
+      customerLinkedArtifactsConversationRef.current = null;
       customerTimelineRequestRef.current += 1;
       customerTimelineConversationRef.current = null;
       setCustomerContext(null);
       setCustomerContextError(null);
+      setCustomerLinkedArtifacts(null);
+      setCustomerLinkedArtifactsError(null);
       setCustomerTimeline(null);
       setCustomerTimelineError(null);
       setClientMatches([]);
@@ -1496,7 +1536,24 @@ export default function ChatPage() {
   const recentProposalSummaries = customerContext?.proposals ?? [];
   const recentProjectSummaries = customerContext?.projects ?? [];
   const contextSignals = customerContext?.signals ?? null;
+  const linkedArtifactCards = customerLinkedArtifacts?.artifacts ?? [];
+  const linkedArtifactGaps = customerLinkedArtifacts?.gaps ?? [];
   const customerTimelineEvents = customerTimeline?.events ?? [];
+
+  const getLinkedArtifactOriginLabel = useCallback((originType: ConversationLinkedArtifact['origin_type']) => {
+    switch (originType) {
+      case 'conversation_context':
+        return 'Conversation context';
+      case 'message_action':
+        return 'Message action';
+      case 'derived_context':
+        return 'Conversation-derived';
+      case 'client_relationship':
+        return 'Client relationship';
+      default:
+        return originType;
+    }
+  }, []);
 
   const openCreateCardModalForMessage = useCallback(async (message: Message) => {
     if (!activeConversation) return;
@@ -1534,6 +1591,42 @@ export default function ChatPage() {
       setLoadingProjectRouting(false);
     }
   }, [activeConversation]);
+
+  const handleLinkedArtifactGapAction = useCallback((gapCode: ConversationLinkedArtifactGap['code']) => {
+    if (gapCode === 'missing_client_link') {
+      setRightPanelTab('contact');
+      setShowExistingClientPicker(true);
+      return;
+    }
+
+    if (gapCode === 'missing_project_context' || gapCode === 'missing_direct_artifact') {
+      if (lastMessage) {
+        void openCreateCardModalForMessage(lastMessage);
+        return;
+      }
+      router.push('/projects');
+      return;
+    }
+
+    if (gapCode === 'missing_proposal_link') {
+      router.push('/proposals');
+    }
+  }, [lastMessage, openCreateCardModalForMessage, router]);
+
+  const getLinkedArtifactGapActionLabel = useCallback((gapCode: ConversationLinkedArtifactGap['code']) => {
+    switch (gapCode) {
+      case 'missing_client_link':
+        return 'Link client';
+      case 'missing_project_context':
+        return lastMessage ? 'Create project link' : 'Open projects';
+      case 'missing_direct_artifact':
+        return lastMessage ? 'Create direct artifact' : 'Open projects';
+      case 'missing_proposal_link':
+        return 'Open proposals';
+      default:
+        return null;
+    }
+  }, [lastMessage]);
 
   const openCreateTaskModalForMessage = useCallback(async (message: Message) => {
     if (!activeConversation) return;
@@ -3187,6 +3280,86 @@ export default function ChatPage() {
                               <div key={signal.label} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                                 <p className="text-[10px] uppercase tracking-[0.08em] text-slate-400">{signal.label}</p>
                                 <p className="mt-1 text-[13px] font-semibold text-slate-800">{signal.value}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <p className="text-[10px] font-bold text-[#575f67] uppercase" style={{ letterSpacing: '0.06em' }}>Linked artifacts</p>
+                          {linkedArtifactCards.length > 0 ? (
+                            <span className="text-[10px] text-slate-400">{linkedArtifactCards.length} visible</span>
+                          ) : null}
+                        </div>
+                        {customerLinkedArtifactsLoading ? (
+                          <div className="flex items-center gap-2 text-xs text-slate-400">
+                            <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                            Loading linkage…
+                          </div>
+                        ) : customerLinkedArtifactsError ? (
+                          <p className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] text-rose-600">
+                            {customerLinkedArtifactsError}
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {linkedArtifactCards.length === 0 ? (
+                              <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-400">
+                                No linked proposal or project is visible for this conversation yet.
+                              </p>
+                            ) : (
+                              linkedArtifactCards.map((artifact: ConversationLinkedArtifact) => (
+                                <button
+                                  key={`${artifact.entity_type}-${artifact.id}`}
+                                  type="button"
+                                  onClick={() => router.push(artifact.href)}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-slate-300 hover:bg-slate-50"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <p className="truncate text-[12px] font-semibold text-slate-800">{artifact.reference}</p>
+                                      <p className="mt-1 truncate text-[11px] text-slate-500">{artifact.title}</p>
+                                    </div>
+                                    <span className={cn(
+                                      'inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize',
+                                      artifact.entity_type === 'project'
+                                        ? getProjectStatusTone(artifact.status)
+                                        : getProposalStatusTone(artifact.status),
+                                    )}>
+                                      {artifact.status}
+                                    </span>
+                                  </div>
+                                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                    <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600 capitalize">
+                                      {artifact.entity_type}
+                                    </span>
+                                    <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
+                                      {getLinkedArtifactOriginLabel(artifact.origin_type)}
+                                    </span>
+                                  </div>
+                                  <p className="mt-2 text-[10px] text-slate-400">
+                                    Updated {formatContextDate(artifact.updated_at)}
+                                  </p>
+                                </button>
+                              ))
+                            )}
+                            {linkedArtifactGaps.map((gap: ConversationLinkedArtifactGap) => (
+                              <div
+                                key={gap.code}
+                                className="rounded-xl border border-dashed border-amber-200 bg-amber-50 px-3 py-2"
+                              >
+                                <p className="text-[11px] font-semibold text-amber-900">{gap.title}</p>
+                                <p className="mt-1 text-[11px] text-amber-700">{gap.description}</p>
+                                {getLinkedArtifactGapActionLabel(gap.code) ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleLinkedArtifactGapAction(gap.code)}
+                                    className="mt-2 text-[11px] font-medium text-amber-800 hover:underline"
+                                  >
+                                    {getLinkedArtifactGapActionLabel(gap.code)}
+                                  </button>
+                                ) : null}
                               </div>
                             ))}
                           </div>
