@@ -735,6 +735,93 @@ def test_get_conversation_timeline_returns_mixed_events_in_reverse_chronological
     assert payload["events"][0]["href"] is not None
 
 
+def test_get_conversation_timeline_includes_other_client_conversations_when_linked(db):
+    from datetime import datetime, timedelta, timezone
+
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+
+    linked_client = Client(
+        name="Acme",
+        company_name="Acme Corp",
+        country="BR",
+        client_type="company",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(linked_client)
+    db.flush()
+
+    first_contact = Contact(
+        name="Ana",
+        email="ana@acme.com",
+        phone="+5511888888888",
+        channel_identifier="ana-acme",
+        client_id=linked_client.id,
+    )
+    second_contact = Contact(
+        name="Bia",
+        email="bia@acme.com",
+        phone="+5511777777777",
+        channel_identifier="bia-acme",
+        client_id=linked_client.id,
+    )
+    db.add_all([first_contact, second_contact])
+    db.flush()
+
+    base_time = datetime.now(timezone.utc) - timedelta(days=2)
+    primary_conversation = Conversation(
+        contact_id=first_contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+        created_at=base_time,
+        updated_at=base_time + timedelta(hours=1),
+    )
+    secondary_conversation = Conversation(
+        contact_id=second_contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.EMAIL,
+        status=ConversationStatus.OPEN,
+        created_at=base_time + timedelta(hours=3),
+        updated_at=base_time + timedelta(hours=4),
+    )
+    db.add_all([primary_conversation, secondary_conversation])
+    db.flush()
+
+    db.add_all([
+        Message(
+            conversation_id=primary_conversation.id,
+            content="Primary conversation message",
+            inbound=True,
+            is_internal=False,
+            created_at=base_time + timedelta(hours=1),
+        ),
+        Message(
+            conversation_id=secondary_conversation.id,
+            content="Secondary conversation note",
+            inbound=False,
+            is_internal=True,
+            owner_id=current_user.id,
+            created_at=base_time + timedelta(hours=5),
+        ),
+    ])
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/chat/conversations/{primary_conversation.id}/timeline")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    conversation_event_ids = {
+        event["conversation_id"]
+        for event in payload["events"]
+        if event["conversation_id"] is not None
+    }
+    assert str(primary_conversation.id) in conversation_event_ids
+    assert str(secondary_conversation.id) in conversation_event_ids
+    assert any(event["description"] == "Secondary conversation note" for event in payload["events"])
+
+
 def test_get_client_timeline_includes_conversation_and_related_records(db):
     from datetime import datetime, timedelta, timezone
 

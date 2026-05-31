@@ -196,6 +196,18 @@ def _project_events(db: Session, *, client_id: Optional[UUID], project_context_i
     return events
 
 
+def _client_conversations(db: Session, *, client_id: UUID, limit: int = 10) -> list[Conversation]:
+    return (
+        db.query(Conversation)
+        .join(Contact, Contact.id == Conversation.contact_id)
+        .options(joinedload(Conversation.contact))
+        .filter(Contact.client_id == client_id)
+        .order_by(Conversation.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
 def build_conversation_timeline(db: Session, conversation: Conversation, *, limit: int = 25) -> CustomerTimelineResponse:
     contact = conversation.contact
     linked_client = None
@@ -206,17 +218,27 @@ def build_conversation_timeline(db: Session, conversation: Conversation, *, limi
             .first()
         )
 
+    conversations: list[Conversation]
+    if linked_client:
+        conversations = _client_conversations(db, client_id=linked_client.id, limit=10)
+        if all(existing.id != conversation.id for existing in conversations):
+            conversations.append(conversation)
+    else:
+        conversations = [conversation]
+    conversation_ids = [item.id for item in conversations]
+
     messages = (
         db.query(Message)
         .options(joinedload(Message.conversation).joinedload(Conversation.contact))
-        .filter(Message.conversation_id == conversation.id)
+        .filter(Message.conversation_id.in_(conversation_ids))
         .order_by(Message.created_at.desc())
         .limit(limit)
         .all()
     )
 
     events: list[CustomerTimelineEventResponse] = [
-        _build_conversation_created_event(conversation, client_id=linked_client.id if linked_client else None)
+        _build_conversation_created_event(item, client_id=linked_client.id if linked_client else None)
+        for item in conversations
     ]
     events.extend(
         _build_message_event(message, client_id=linked_client.id if linked_client else None)
@@ -243,15 +265,7 @@ def build_conversation_timeline(db: Session, conversation: Conversation, *, limi
 
 
 def build_client_timeline(db: Session, client: Client, *, limit: int = 25) -> CustomerTimelineResponse:
-    conversations = (
-        db.query(Conversation)
-        .join(Contact, Contact.id == Conversation.contact_id)
-        .options(joinedload(Conversation.contact))
-        .filter(Contact.client_id == client.id)
-        .order_by(Conversation.updated_at.desc())
-        .limit(10)
-        .all()
-    )
+    conversations = _client_conversations(db, client_id=client.id, limit=10)
     conversation_ids = [conversation.id for conversation in conversations]
 
     messages: list[Message] = []
