@@ -26,6 +26,7 @@ from app.models.models import (
     ProjectSourceType,
     ProjectStatus,
     Proposal,
+    ProposalStatusHistory,
     ProposalStatus,
     User,
     UserType,
@@ -60,6 +61,7 @@ def db():
         ProjectStage.__table__,
         Project.__table__,
         Proposal.__table__,
+        ProposalStatusHistory.__table__,
         Conversation.__table__,
     ]
     with engine.begin() as connection:
@@ -622,3 +624,197 @@ def test_get_conversation_context_includes_linked_client_proposals_and_projects(
         "Migration kickoff",
         "Renewal plan",
     }
+
+
+def test_get_conversation_timeline_returns_mixed_events_in_reverse_chronological_order(db):
+    from datetime import datetime, timedelta, timezone
+
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    _seed_project_stage(db, "lead", "Lead", 1)
+
+    linked_client = Client(
+        name="Acme",
+        company_name="Acme Corp",
+        country="BR",
+        client_type="company",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(linked_client)
+    db.flush()
+
+    contact = Contact(
+        name="Ana",
+        email="ana@acme.com",
+        phone="+5511888888888",
+        channel_identifier="ana-acme",
+        client_id=linked_client.id,
+    )
+    db.add(contact)
+    db.flush()
+
+    base_time = datetime.now(timezone.utc) - timedelta(days=3)
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+        created_at=base_time,
+    )
+    db.add(conversation)
+    db.flush()
+
+    inbound_message = Message(
+        conversation_id=conversation.id,
+        content="Need help with the proposal",
+        inbound=True,
+        is_internal=False,
+        created_at=base_time + timedelta(hours=1),
+    )
+    internal_note = Message(
+        conversation_id=conversation.id,
+        owner_id=current_user.id,
+        content="Customer asked for payment flexibility",
+        inbound=False,
+        is_internal=True,
+        created_at=base_time + timedelta(hours=2),
+    )
+    db.add_all([inbound_message, internal_note])
+
+    proposal = Proposal(
+        title="Support expansion",
+        customer_name="Acme",
+        status=ProposalStatus.SENT,
+        total_amount=150000,
+        client_id=linked_client.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=3),
+        updated_at=base_time + timedelta(hours=4),
+    )
+    db.add(proposal)
+    db.flush()
+
+    proposal_status = ProposalStatusHistory(
+        proposal_id=proposal.id,
+        from_status="draft",
+        to_status="sent",
+        changed_by_user_id=current_user.id,
+        reason="Customer requested a formal quote",
+        created_at=base_time + timedelta(hours=4),
+    )
+    db.add(proposal_status)
+
+    project = Project(
+        title="Migration kickoff",
+        description="Current scoped project",
+        stage="lead",
+        status=ProjectStatus.OPEN,
+        priority=ProjectPriority.HIGH,
+        source_type=ProjectSourceType.MANUAL,
+        client_id=linked_client.id,
+        contact_id=contact.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=5),
+        updated_at=base_time + timedelta(hours=6),
+    )
+    db.add(project)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/chat/conversations/{conversation.id}/timeline")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["scope"] == "conversation"
+    event_types = [event["event_type"] for event in payload["events"]]
+    assert "internal_note" in event_types
+    assert "proposal_status_changed" in event_types
+    assert "project_updated" in event_types
+    occurred_at = [event["occurred_at"] for event in payload["events"]]
+    assert occurred_at == sorted(occurred_at, reverse=True)
+    assert payload["events"][0]["href"] is not None
+
+
+def test_get_client_timeline_includes_conversation_and_related_records(db):
+    from datetime import datetime, timedelta, timezone
+
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    _seed_project_stage(db, "lead", "Lead", 1)
+
+    linked_client = Client(
+        name="Acme",
+        company_name="Acme Corp",
+        country="BR",
+        client_type="company",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(linked_client)
+    db.flush()
+
+    contact = Contact(
+        name="Ana",
+        email="ana@acme.com",
+        phone="+5511888888888",
+        channel_identifier="ana-acme",
+        client_id=linked_client.id,
+    )
+    db.add(contact)
+    db.flush()
+
+    base_time = datetime.now(timezone.utc) - timedelta(days=2)
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WEB,
+        status=ConversationStatus.OPEN,
+        created_at=base_time,
+    )
+    db.add(conversation)
+    db.flush()
+
+    db.add(Message(
+        conversation_id=conversation.id,
+        content="Initial inbound message",
+        inbound=True,
+        is_internal=False,
+        created_at=base_time + timedelta(hours=1),
+    ))
+
+    proposal = Proposal(
+        title="Onboarding package",
+        customer_name="Acme",
+        status=ProposalStatus.DRAFT,
+        total_amount=90000,
+        client_id=linked_client.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=2),
+    )
+    db.add(proposal)
+
+    project = Project(
+        title="Renewal project",
+        description="Current scoped project",
+        stage="lead",
+        status=ProjectStatus.OPEN,
+        priority=ProjectPriority.MEDIUM,
+        source_type=ProjectSourceType.MANUAL,
+        client_id=linked_client.id,
+        contact_id=contact.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=3),
+    )
+    db.add(project)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/admin/clients/{linked_client.id}/timeline")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["scope"] == "client"
+    event_types = {event["event_type"] for event in payload["events"]}
+    assert "conversation_created" in event_types
+    assert "message_inbound" in event_types
+    assert "proposal_created" in event_types
+    assert "project_created" in event_types

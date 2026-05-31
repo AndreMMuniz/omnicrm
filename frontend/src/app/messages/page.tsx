@@ -24,6 +24,8 @@ import type {
   ConversationCustomerContext,
   ConversationStatus,
   ConversationTag,
+  CustomerTimeline,
+  CustomerTimelineEvent,
   CustomerContextProjectSummary,
   CustomerContextProposalSummary,
   Message,
@@ -263,6 +265,16 @@ function formatContextDate(dateStr: string | undefined): string {
   return new Date(dateStr).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+function formatTimelineDate(dateStr: string | undefined): string {
+  if (!dateStr) return 'Unknown time';
+  return new Date(dateStr).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 function formatContextCurrency(value: number, currency = 'BRL'): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -299,6 +311,46 @@ function getProposalStatusTone(status: string): string {
     default:
       return 'border-slate-200 bg-slate-50 text-slate-600';
   }
+}
+
+function getTimelineEventTone(eventType: string, isInternal: boolean): string {
+  if (isInternal) return 'border-amber-200 bg-amber-50 text-amber-700';
+  if (eventType.startsWith('proposal')) return 'border-sky-200 bg-sky-50 text-sky-700';
+  if (eventType.startsWith('project')) return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (eventType.startsWith('message')) return 'border-violet-200 bg-violet-50 text-violet-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
+function getTimelineEventLabel(eventType: string): string {
+  switch (eventType) {
+    case 'internal_note':
+      return 'Internal note';
+    case 'message_inbound':
+      return 'Inbound';
+    case 'message_outbound':
+      return 'Outbound';
+    case 'conversation_created':
+      return 'Conversation';
+    case 'proposal_created':
+      return 'Proposal';
+    case 'proposal_status_changed':
+      return 'Proposal status';
+    case 'project_created':
+      return 'Project';
+    case 'project_updated':
+      return 'Project update';
+    default:
+      return 'Event';
+  }
+}
+
+function getTimelineEventIcon(eventType: string, isInternal: boolean): string {
+  if (isInternal) return 'sticky_note_2';
+  if (eventType.startsWith('proposal')) return 'request_quote';
+  if (eventType.startsWith('project')) return 'workspaces';
+  if (eventType.startsWith('message')) return 'chat';
+  if (eventType === 'conversation_created') return 'forum';
+  return 'schedule';
 }
 
 function TagBadge({ tags, className }: { tags?: ConversationTag[]; className?: string }) {
@@ -1072,7 +1124,7 @@ export default function ChatPage() {
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
   const [aiSheetOpen, setAiSheetOpen] = useState(false);
   const [showAIDesktop, setShowAIDesktop] = useState(true);
-  const [rightPanelTab, setRightPanelTab] = useState<'contact' | 'details' | 'history'>('contact');
+  const [rightPanelTab, setRightPanelTab] = useState<'contact' | 'details' | 'history' | 'timeline'>('contact');
   const [clientMatches, setClientMatches] = useState<import('@/types/chat').ClientMatch[]>([]);
   const [clientAlreadyLinked, setClientAlreadyLinked] = useState(false);
   const [clientDetecting, setClientDetecting] = useState(false);
@@ -1080,6 +1132,9 @@ export default function ChatPage() {
   const [customerContext, setCustomerContext] = useState<ConversationCustomerContext | null>(null);
   const [customerContextLoading, setCustomerContextLoading] = useState(false);
   const [customerContextError, setCustomerContextError] = useState<string | null>(null);
+  const [customerTimeline, setCustomerTimeline] = useState<CustomerTimeline | null>(null);
+  const [customerTimelineLoading, setCustomerTimelineLoading] = useState(false);
+  const [customerTimelineError, setCustomerTimelineError] = useState<string | null>(null);
   const [clientHistory, setClientHistory] = useState<import('@/lib/api/conversations').ConversationSummary[]>([]);
   const [clientHistoryLoading, setClientHistoryLoading] = useState(false);
   const [showQuickClientForm, setShowQuickClientForm] = useState(false);
@@ -1144,6 +1199,8 @@ export default function ChatPage() {
   const lastAIFetchedKeyRef = useRef<string | null>(null);
   const customerContextRequestRef = useRef(0);
   const customerContextConversationRef = useRef<string | null>(null);
+  const customerTimelineRequestRef = useRef(0);
+  const customerTimelineConversationRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!openMessageMenuId) return;
@@ -1243,6 +1300,41 @@ export default function ChatPage() {
     }
   }, []);
 
+  const refreshConversationTimeline = useCallback(async (conversationId: string) => {
+    const requestId = customerTimelineRequestRef.current + 1;
+    customerTimelineRequestRef.current = requestId;
+    customerTimelineConversationRef.current = conversationId;
+
+    const isStaleRequest = () => (
+      customerTimelineRequestRef.current !== requestId
+      || customerTimelineConversationRef.current !== conversationId
+    );
+
+    setCustomerTimelineLoading(true);
+    setCustomerTimelineError(null);
+
+    try {
+      const timeline = await conversationsApi.getConversationTimeline(conversationId, { limit: 24 });
+      if (isStaleRequest()) return;
+      setCustomerTimeline(timeline);
+    } catch (error) {
+      if (isStaleRequest()) return;
+      setCustomerTimeline(null);
+      setCustomerTimelineError(error instanceof Error ? error.message : 'Failed to load timeline.');
+    } finally {
+      if (!isStaleRequest()) {
+        setCustomerTimelineLoading(false);
+      }
+    }
+  }, []);
+
+  const refreshConversationPanelData = useCallback(async (conversationId: string) => {
+    await Promise.all([
+      refreshConversationCustomerContext(conversationId),
+      refreshConversationTimeline(conversationId),
+    ]);
+  }, [refreshConversationCustomerContext, refreshConversationTimeline]);
+
   const handleQuickReplyCreate = useCallback(async () => {
     if (!quickReplyModal) return;
 
@@ -1310,8 +1402,12 @@ export default function ChatPage() {
     if (!activeConversation?.id) {
       customerContextRequestRef.current += 1;
       customerContextConversationRef.current = null;
+      customerTimelineRequestRef.current += 1;
+      customerTimelineConversationRef.current = null;
       setCustomerContext(null);
       setCustomerContextError(null);
+      setCustomerTimeline(null);
+      setCustomerTimelineError(null);
       setClientMatches([]);
       setClientAlreadyLinked(false);
       setClientHistory([]);
@@ -1327,8 +1423,8 @@ export default function ChatPage() {
     setExistingClientSearch('');
     setExistingClientResults([]);
     setExistingClientError(null);
-    void refreshConversationCustomerContext(activeConversation.id);
-  }, [activeConversation?.id, refreshConversationCustomerContext]);
+    void refreshConversationPanelData(activeConversation.id);
+  }, [activeConversation?.id, refreshConversationPanelData]);
 
   useEffect(() => {
     if (!showExistingClientPicker || !activeConversation?.contact_id) return;
@@ -1400,6 +1496,7 @@ export default function ChatPage() {
   const recentProposalSummaries = customerContext?.proposals ?? [];
   const recentProjectSummaries = customerContext?.projects ?? [];
   const contextSignals = customerContext?.signals ?? null;
+  const customerTimelineEvents = customerTimeline?.events ?? [];
 
   const openCreateCardModalForMessage = useCallback(async (message: Message) => {
     if (!activeConversation) return;
@@ -1502,6 +1599,7 @@ export default function ChatPage() {
         ...current,
         [createCardModal.message.id]: [...(current[createCardModal.message.id] ?? []), createdProject],
       }));
+      await refreshConversationPanelData(activeConversation.id);
       setContextActionHint({
         message: routingProject
           ? `Card created using ${routingProject.reference} routing context.`
@@ -1514,7 +1612,7 @@ export default function ChatPage() {
     } finally {
       setSubmittingProjectCard(false);
     }
-  }, [activeConversation, availableProjects, createCardModal]);
+  }, [activeConversation, availableProjects, createCardModal, refreshConversationPanelData]);
 
   const handleCreateTaskSubmit = useCallback(async () => {
     if (!createTaskModal || !activeConversation) return;
@@ -1546,6 +1644,7 @@ export default function ChatPage() {
         [createTaskModal.message.id]: [...(current[createTaskModal.message.id] ?? []), createdTask],
       }));
       await fetchConversations();
+      await refreshConversationPanelData(activeConversation.id);
       setContextActionHint({
         message: createdTask.project_reference
           ? `Task created inside ${createdTask.project_reference}.`
@@ -1558,7 +1657,7 @@ export default function ChatPage() {
     } finally {
       setSubmittingProjectTask(false);
     }
-  }, [activeConversation, availableProjects, createTaskModal, fetchConversations]);
+  }, [activeConversation, availableProjects, createTaskModal, fetchConversations, refreshConversationPanelData]);
 
   const handleConversationTagFromMessage = useCallback(async (tags: ConversationTag[]) => {
     if (!activeConversation) return;
@@ -1727,14 +1826,14 @@ export default function ChatPage() {
       setDeletingProposal(true);
       await proposalsApi.deleteProposal(deleteProposalModal.proposal.id);
       setDeleteProposalModal(null);
-      await refreshConversationCustomerContext(activeConversation.id);
+      await refreshConversationPanelData(activeConversation.id);
       setContextActionHint({ message: 'Proposal deleted.' });
     } catch (error) {
       setContextActionHint({ message: error instanceof Error ? error.message : 'Failed to delete proposal.' });
     } finally {
       setDeletingProposal(false);
     }
-  }, [activeConversation, deleteProposalModal, refreshConversationCustomerContext]);
+  }, [activeConversation, deleteProposalModal, refreshConversationPanelData]);
 
   // ── WebSocket event dispatcher ─────────────────────────────────────────────
   useEffect(() => {
@@ -1857,13 +1956,14 @@ export default function ChatPage() {
       setSavingInternalNote(true);
       await createInternalNote(activeConversation.id, internalNoteDraft);
       setInternalNoteDraft('');
+      await refreshConversationTimeline(activeConversation.id);
       setContextActionHint({ message: 'Internal note added to the conversation.' });
     } catch (error) {
       setContextActionHint({ message: error instanceof Error ? error.message : 'Failed to create internal note.' });
     } finally {
       setSavingInternalNote(false);
     }
-  }, [activeConversation, createInternalNote, internalNoteDraft]);
+  }, [activeConversation, createInternalNote, internalNoteDraft, refreshConversationTimeline]);
 
   const loading = sending || savingInternalNote;
   const effectiveMobileView = activeConversation ? mobileView : 'list';
@@ -2762,6 +2862,7 @@ export default function ChatPage() {
                   ['contact', 'person', 'Contact'],
                   ['details', 'info', 'Details'],
                   ['history', 'history', 'History'],
+                  ['timeline', 'timeline', 'Timeline'],
                 ] as const).map(([t, icon, label]) => (
                   <button
                     key={t}
@@ -2859,7 +2960,7 @@ export default function ChatPage() {
                                   if (!activeConversation.contact_id) return;
                                   if (!confirm('Unlink this client?')) return;
                                   await conversationsApi.linkContactToClient(activeConversation.contact_id, null).catch(() => {});
-                                  await refreshConversationCustomerContext(activeConversation.id);
+                                  await refreshConversationPanelData(activeConversation.id);
                                 }}
                                 className="shrink-0 text-[10px] text-slate-400 hover:text-red-500 transition-colors"
                                 title="Unlink"
@@ -2892,7 +2993,7 @@ export default function ChatPage() {
                                   setClientLinking(true);
                                   try {
                                     await conversationsApi.linkContactToClient(activeConversation.contact_id, m.id);
-                                    await refreshConversationCustomerContext(activeConversation.id);
+                                    await refreshConversationPanelData(activeConversation.id);
                                   } catch { /* ignore */ } finally {
                                     setClientLinking(false);
                                   }
@@ -2959,7 +3060,7 @@ export default function ChatPage() {
                                   });
                                   await conversationsApi.linkContactToClient(activeConversation.contact_id, newClient.id);
                                   setShowQuickClientForm(false);
-                                  await refreshConversationCustomerContext(activeConversation.id);
+                                  await refreshConversationPanelData(activeConversation.id);
                                 } catch (err: unknown) {
                                   setQuickClientError(err instanceof Error ? err.message : 'Failed to create client.');
                                 } finally {
@@ -3019,7 +3120,7 @@ export default function ChatPage() {
                                         try {
                                           await conversationsApi.linkContactToClient(activeConversation.contact_id, client.id);
                                           setShowExistingClientPicker(false);
-                                          await refreshConversationCustomerContext(activeConversation.id);
+                                          await refreshConversationPanelData(activeConversation.id);
                                         } catch (err: unknown) {
                                           setExistingClientError(err instanceof Error ? err.message : 'Failed to link client.');
                                         } finally {
@@ -3205,6 +3306,81 @@ export default function ChatPage() {
                         )}
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {rightPanelTab === 'timeline' && (
+                  <div className="p-4 space-y-3.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-bold text-[#575f67] uppercase" style={{ letterSpacing: '0.06em' }}>Relationship timeline</p>
+                        <p className="mt-1 text-[11px] text-slate-400">Conversation, notes, proposals, and projects in one chronological feed.</p>
+                      </div>
+                      {linkedClient ? (
+                        <button
+                          onClick={() => router.push(`/clients?clientId=${linkedClient.id}`)}
+                          className="text-[11px] text-indigo-600 hover:underline"
+                        >
+                          Open client
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {customerTimelineLoading ? (
+                      <div className="flex items-center gap-2 text-xs text-slate-400">
+                        <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                        Loading timeline…
+                      </div>
+                    ) : customerTimelineError ? (
+                      <p className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] text-rose-600">
+                        {customerTimelineError}
+                      </p>
+                    ) : customerTimelineEvents.length === 0 ? (
+                      <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-[11px] text-slate-400">
+                        No timeline events available for this relationship yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {customerTimelineEvents.map((event: CustomerTimelineEvent) => (
+                          <button
+                            key={event.id}
+                            type="button"
+                            onClick={() => {
+                              if (event.href) router.push(event.href);
+                            }}
+                            className={cn(
+                              'w-full rounded-xl border px-3 py-2.5 text-left transition-colors',
+                              event.href ? 'hover:border-slate-300 hover:bg-slate-50' : 'cursor-default',
+                              event.is_internal ? 'border-amber-100 bg-amber-50/60' : 'border-slate-200 bg-white'
+                            )}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="material-symbols-outlined text-[15px] text-slate-400">
+                                    {getTimelineEventIcon(event.event_type, event.is_internal)}
+                                  </span>
+                                  <span className={cn('inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold', getTimelineEventTone(event.event_type, event.is_internal))}>
+                                    {getTimelineEventLabel(event.event_type)}
+                                  </span>
+                                </div>
+                                <p className="mt-2 text-[12px] font-semibold text-slate-800">{event.title}</p>
+                                {event.description ? (
+                                  <p className="mt-1 text-[11px] text-slate-500">{event.description}</p>
+                                ) : null}
+                                <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-400">
+                                  <span>{formatTimelineDate(event.occurred_at)}</span>
+                                  {event.source_entity_label ? <span>• {event.source_entity_label}</span> : null}
+                                </div>
+                              </div>
+                              {event.href ? (
+                                <span className="material-symbols-outlined text-[15px] text-slate-300">open_in_new</span>
+                              ) : null}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 

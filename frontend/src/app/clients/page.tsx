@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Modal from "@/components/shared/Modal";
 import { clientsApi } from "@/lib/api";
+import type { CustomerTimelineEvent } from "@/types/chat";
 import type { ClientDto, ClientListDto, ClientCreateRequest, ClientUpdateRequest } from "@/types/client";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -19,6 +20,50 @@ function countryLabel(code: string) {
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatTimelineDate(iso: string) {
+  return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function getTimelineBadge(eventType: string, isInternal: boolean) {
+  if (isInternal) return "border-amber-200 bg-amber-50 text-amber-700";
+  if (eventType.startsWith("proposal")) return "border-sky-200 bg-sky-50 text-sky-700";
+  if (eventType.startsWith("project")) return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (eventType.startsWith("message")) return "border-violet-200 bg-violet-50 text-violet-700";
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function getTimelineIcon(eventType: string, isInternal: boolean) {
+  if (isInternal) return "sticky_note_2";
+  if (eventType.startsWith("proposal")) return "request_quote";
+  if (eventType.startsWith("project")) return "workspaces";
+  if (eventType.startsWith("message")) return "chat";
+  if (eventType === "conversation_created") return "forum";
+  return "schedule";
+}
+
+function getTimelineLabel(eventType: string) {
+  switch (eventType) {
+    case "internal_note":
+      return "Internal note";
+    case "message_inbound":
+      return "Inbound";
+    case "message_outbound":
+      return "Outbound";
+    case "conversation_created":
+      return "Conversation";
+    case "proposal_created":
+      return "Proposal";
+    case "proposal_status_changed":
+      return "Proposal status";
+    case "project_created":
+      return "Project";
+    case "project_updated":
+      return "Project update";
+    default:
+      return "Event";
+  }
 }
 
 // ─── Client form (rendered inside Modal) ────────────────────────────────────
@@ -248,8 +293,16 @@ function ClientForm({ initial, onSave, onClose, saving, error }: ClientFormProps
 // ─── Client detail panel ─────────────────────────────────────────────────────
 
 function ClientDetail({
-  client, onEdit, onDelete,
-}: { client: ClientDto; onEdit: () => void; onDelete: () => void }) {
+  client, timeline, timelineLoading, timelineError, onOpenTimelineEvent, onEdit, onDelete,
+}: {
+  client: ClientDto;
+  timeline: CustomerTimelineEvent[];
+  timelineLoading: boolean;
+  timelineError: string | null;
+  onOpenTimelineEvent: (event: CustomerTimelineEvent) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100">
@@ -303,6 +356,57 @@ function ClientDetail({
             <InfoRow icon="update"         label="Updated"  value={formatDate(client.updated_at)} />
           </div>
         </section>
+
+        <section>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Unified timeline</p>
+            <span className="text-[10px] text-slate-400">Conversation, notes, proposals, projects</span>
+          </div>
+
+          {timelineLoading ? (
+            <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-400">
+              <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+              Loading timeline…
+            </div>
+          ) : timelineError ? (
+            <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-600">
+              {timelineError}
+            </div>
+          ) : timeline.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-400">
+              No relationship events available for this client yet.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {timeline.map((event) => (
+                <button
+                  key={event.id}
+                  type="button"
+                  onClick={() => onOpenTimelineEvent(event)}
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left transition-colors hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-[16px] text-slate-400">{getTimelineIcon(event.event_type, event.is_internal)}</span>
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${getTimelineBadge(event.event_type, event.is_internal)}`}>
+                          {getTimelineLabel(event.event_type)}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-slate-800">{event.title}</p>
+                      {event.description ? <p className="mt-1 text-xs text-slate-500">{event.description}</p> : null}
+                      <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-400">
+                        <span>{formatTimelineDate(event.occurred_at)}</span>
+                        {event.source_entity_label ? <span>• {event.source_entity_label}</span> : null}
+                      </div>
+                    </div>
+                    {event.href ? <span className="material-symbols-outlined text-[16px] text-slate-300">open_in_new</span> : null}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );
@@ -323,15 +427,19 @@ function InfoRow({ icon, label, value }: { icon: string; label: string; value: s
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function ClientsPage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const requestedClientId = searchParams.get("clientId");
   const [clients, setClients] = useState<ClientListDto[]>([]);
   const [selected, setSelected] = useState<ClientDto | null>(null);
+  const [timeline, setTimeline] = useState<CustomerTimelineEvent[]>([]);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"" | "company" | "individual">("");
 
   const [loading, setLoading] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
@@ -356,7 +464,7 @@ export default function ClientsPage() {
 
   useEffect(() => { loadClients(); }, [loadClients]);
 
-  async function selectClient(id: string) {
+  const selectClient = useCallback(async (id: string) => {
     if (selected?.id === id) return;
     setLoadingDetail(true);
     try {
@@ -366,12 +474,44 @@ export default function ClientsPage() {
     } finally {
       setLoadingDetail(false);
     }
-  }
+  }, [selected?.id]);
 
   useEffect(() => {
     if (!requestedClientId || selected?.id === requestedClientId) return;
     void selectClient(requestedClientId);
-  }, [requestedClientId, selected?.id]);
+  }, [requestedClientId, selectClient, selected?.id]);
+
+  useEffect(() => {
+    if (!selected?.id) {
+      setTimeline([]);
+      setTimelineError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setTimelineLoading(true);
+    setTimelineError(null);
+
+    clientsApi.getClientTimeline(selected.id, { limit: 24 })
+      .then((response) => {
+        if (cancelled) return;
+        setTimeline(response.events ?? []);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setTimeline([]);
+        setTimelineError(error instanceof Error ? error.message : "Failed to load timeline.");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setTimelineLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id]);
 
   async function handleSave(data: ClientCreateRequest) {
     setSaving(true);
@@ -537,6 +677,12 @@ export default function ClientsPage() {
           ) : selected ? (
             <ClientDetail
               client={selected}
+              timeline={timeline}
+              timelineLoading={timelineLoading}
+              timelineError={timelineError}
+              onOpenTimelineEvent={(event) => {
+                if (event.href) router.push(event.href);
+              }}
               onEdit={() => { setEditTarget(selected); setShowForm(true); setFormError(null); }}
               onDelete={() => handleDelete(selected.id)}
             />

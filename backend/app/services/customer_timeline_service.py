@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Optional
 from uuid import UUID
 
@@ -152,13 +151,6 @@ def _sort_events(events: list[CustomerTimelineEventResponse], *, limit: int) -> 
         reverse=True,
     )
     return ordered[:limit]
-
-
-@dataclass
-class TimelineScope:
-    client: Optional[Client]
-    conversation: Optional[Conversation]
-
 
 def _proposal_events(db: Session, *, client_id: UUID) -> list[CustomerTimelineEventResponse]:
     proposals = (
