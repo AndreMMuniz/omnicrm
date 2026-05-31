@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Modal from "@/components/shared/Modal";
 import { clientsApi } from "@/lib/api";
 import type { ClientDto, ClientListDto, ClientCreateRequest, ClientUpdateRequest } from "@/types/client";
@@ -322,6 +323,8 @@ function InfoRow({ icon, label, value }: { icon: string; label: string; value: s
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function ClientsPage() {
+  const searchParams = useSearchParams();
+  const requestedClientId = searchParams.get("clientId");
   const [clients, setClients] = useState<ClientListDto[]>([]);
   const [selected, setSelected] = useState<ClientDto | null>(null);
   const [search, setSearch] = useState("");
@@ -364,6 +367,11 @@ export default function ClientsPage() {
       setLoadingDetail(false);
     }
   }
+
+  useEffect(() => {
+    if (!requestedClientId || selected?.id === requestedClientId) return;
+    void selectClient(requestedClientId);
+  }, [requestedClientId, selected?.id]);
 
   async function handleSave(data: ClientCreateRequest) {
     setSaving(true);

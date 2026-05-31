@@ -1142,6 +1142,8 @@ export default function ChatPage() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const messageActionsRef = useRef<HTMLDivElement | null>(null);
   const lastAIFetchedKeyRef = useRef<string | null>(null);
+  const customerContextRequestRef = useRef(0);
+  const customerContextConversationRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!openMessageMenuId) return;
@@ -1178,12 +1180,22 @@ export default function ChatPage() {
   }, []);
 
   const refreshConversationCustomerContext = useCallback(async (conversationId: string) => {
+    const requestId = customerContextRequestRef.current + 1;
+    customerContextRequestRef.current = requestId;
+    customerContextConversationRef.current = conversationId;
+
+    const isStaleRequest = () => (
+      customerContextRequestRef.current !== requestId
+      || customerContextConversationRef.current !== conversationId
+    );
+
     setClientDetecting(true);
     setCustomerContextLoading(true);
     setCustomerContextError(null);
 
     try {
       const context = await conversationsApi.getConversationContext(conversationId);
+      if (isStaleRequest()) return;
       setCustomerContext(context);
 
       const linkedClient = context.client ?? null;
@@ -1203,24 +1215,31 @@ export default function ChatPage() {
         setClientHistoryLoading(true);
         try {
           const response = await conversationsApi.getClientConversations(linkedClient.id, { limit: 20 });
+          if (isStaleRequest()) return;
           setClientHistory((response.data ?? []).filter((conversation) => conversation.id !== conversationId));
         } catch {
+          if (isStaleRequest()) return;
           setClientHistory([]);
         } finally {
-          setClientHistoryLoading(false);
+          if (!isStaleRequest()) {
+            setClientHistoryLoading(false);
+          }
         }
       } else {
         setClientHistory([]);
       }
     } catch (error) {
+      if (isStaleRequest()) return;
       setCustomerContext(null);
       setClientAlreadyLinked(false);
       setClientMatches([]);
       setClientHistory([]);
       setCustomerContextError(error instanceof Error ? error.message : 'Failed to load customer context.');
     } finally {
-      setClientDetecting(false);
-      setCustomerContextLoading(false);
+      if (!isStaleRequest()) {
+        setClientDetecting(false);
+        setCustomerContextLoading(false);
+      }
     }
   }, []);
 
@@ -1289,6 +1308,8 @@ export default function ChatPage() {
   // Detecta cliente vinculado ao trocar de conversa ativa
   useEffect(() => {
     if (!activeConversation?.id) {
+      customerContextRequestRef.current += 1;
+      customerContextConversationRef.current = null;
       setCustomerContext(null);
       setCustomerContextError(null);
       setClientMatches([]);
