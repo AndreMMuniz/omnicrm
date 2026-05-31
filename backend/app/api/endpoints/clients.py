@@ -10,6 +10,7 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.models import Client, Contact, Conversation, User
+from app.schemas.chat import CustomerTimelineResponse
 from app.schemas.client import (
     ClientContactListResponse,
     ClientCreate,
@@ -18,6 +19,7 @@ from app.schemas.client import (
     ClientUpdate,
 )
 from app.schemas.common import create_error_response, create_paginated_response, create_response
+from app.services.customer_timeline_service import build_client_timeline
 
 router = APIRouter()
 
@@ -119,6 +121,20 @@ async def list_client_contacts(
         .all()
     )
     return create_response([ClientContactListResponse.model_validate(contact) for contact in contacts])
+
+
+@router.get("/clients/{client_id}/timeline")
+@limiter.limit("60/minute")
+async def get_client_timeline(
+    request: Request,
+    client_id: UUID,
+    limit: int = 25,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    client = _get_client_or_404(client_id, db)
+    timeline = build_client_timeline(db, client, limit=max(1, min(limit, 50)))
+    return create_response(CustomerTimelineResponse.model_validate(timeline))
 
 
 @router.patch("/clients/{client_id}")

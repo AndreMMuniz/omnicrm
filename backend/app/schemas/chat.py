@@ -100,6 +100,30 @@ class ConversationCustomerContextResponse(BaseModel):
     signals: CustomerContextSignalsResponse
 
 
+class CustomerTimelineEventResponse(BaseModel):
+    id: str
+    event_type: str
+    occurred_at: datetime
+    title: str
+    description: Optional[str] = None
+    source_entity_type: str
+    source_entity_id: UUID
+    source_entity_label: Optional[str] = None
+    is_internal: bool = False
+    conversation_id: Optional[UUID] = None
+    client_id: Optional[UUID] = None
+    proposal_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
+    href: Optional[str] = None
+
+
+class CustomerTimelineResponse(BaseModel):
+    scope: str
+    conversation_id: Optional[UUID] = None
+    client_id: Optional[UUID] = None
+    events: List[CustomerTimelineEventResponse] = Field(default_factory=list)
+
+
 class AssignedUserSlim(BaseModel):
     id: UUID
     full_name: str

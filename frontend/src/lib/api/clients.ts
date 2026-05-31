@@ -1,4 +1,5 @@
 import { apiGet, apiGetList, apiMutate } from "@/lib/apiClient";
+import type { CustomerTimeline } from "@/types/chat";
 import type { ClientContactDto, ClientCreateRequest, ClientDto, ClientListDto, ClientUpdateRequest } from "@/types/client";
 
 export async function listClients(params?: Record<string, string | number | undefined>) {
@@ -16,6 +17,18 @@ export async function getClient(clientId: string): Promise<ClientDto> {
 
 export async function listClientContacts(clientId: string): Promise<ClientContactDto[]> {
   return apiGet<ClientContactDto[]>(`/admin/clients/${clientId}/contacts`);
+}
+
+export async function getClientTimeline(
+  clientId: string,
+  params?: Record<string, string | number | undefined>,
+): Promise<CustomerTimeline> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiGet<CustomerTimeline>(`/admin/clients/${clientId}/timeline${suffix}`);
 }
 
 export async function createClient(body: ClientCreateRequest): Promise<ClientDto> {

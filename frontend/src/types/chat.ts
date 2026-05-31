@@ -53,6 +53,30 @@ export interface ConversationCustomerContext {
   signals: ConversationCustomerContextSignals;
 }
 
+export interface CustomerTimelineEvent {
+  id: string;
+  event_type: string;
+  occurred_at: string;
+  title: string;
+  description?: string | null;
+  source_entity_type: string;
+  source_entity_id: string;
+  source_entity_label?: string | null;
+  is_internal: boolean;
+  conversation_id?: string | null;
+  client_id?: string | null;
+  proposal_id?: string | null;
+  project_id?: string | null;
+  href?: string | null;
+}
+
+export interface CustomerTimeline {
+  scope: string;
+  conversation_id?: string | null;
+  client_id?: string | null;
+  events: CustomerTimelineEvent[];
+}
+
 export interface ClientMatch extends ClientSummary {
   match_field: "linked";
 }
