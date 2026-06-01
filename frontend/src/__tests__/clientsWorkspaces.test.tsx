@@ -45,8 +45,10 @@ describe("clients workspace routes", () => {
     render(<CompaniesPage />);
 
     expect(screen.getByRole("heading", { name: "Companies" }).textContent).toBe("Companies");
-    expect(await screen.findByText("Manage company accounts with a split-view CRM workspace.")).toBeTruthy();
+    expect(await screen.findByText("Table-first CRM workspace for account scanning, ownership review, and quick company context.")).toBeTruthy();
     expect(screen.getByPlaceholderText("Search by company, trade name, owner, or country...")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Company" }).textContent).toBe("Company");
+    expect(screen.getByRole("columnheader", { name: "Open opportunities" }).textContent).toBe("Open opportunities");
   });
 
   it("renders the People workspace placeholder with a normal-width content card", () => {
