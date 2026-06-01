@@ -141,3 +141,8 @@ makefile
 Makefile
 CLAUDE.md
 CLAUDE copy.md
+.codex
+.design-cache-login
+.design-cache-signup
+.github
+AGENTS.md
