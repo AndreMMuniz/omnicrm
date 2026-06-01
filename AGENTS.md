@@ -16,6 +16,15 @@ Ver `DEPLOY.md` para o checklist completo e o ADR.
 - Rate limiting via `slowapi` — ver `backend/app/core/limiter.py`
 - Tokens em HttpOnly cookies (não localStorage)
 
+## Workflow do projeto
+- O workflow oficial deste repositório é **BMad**.
+- Use `docs/_bmad/` como fonte de templates, módulos e configuração do método.
+- Use `docs/_bmad-output/` como fonte oficial do estado atual, artefatos e andamento do projeto.
+- `docs/superpowers/` pode conter planos, rascunhos e documentação histórica/de apoio criada em outro fluxo.
+- **Não** trate `docs/superpowers/` como autoridade sobre prioridade, status do sprint ou próximo passo, a menos que o usuário peça isso explicitamente.
+- Só use `Superpowers` neste repositório quando o usuário solicitar de forma explícita.
+- Ao existir conflito entre documentos de `BMad` e `Superpowers`, priorize `BMad` para workflow e acompanhamento do projeto, preservando os arquivos de `Superpowers` como referência.
+
 ## graphify
 
 This project has a graphify knowledge graph at graphify-out/.

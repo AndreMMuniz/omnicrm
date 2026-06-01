@@ -3,7 +3,6 @@
 .agents/
 .claude/
 .trae/
-docs/
 skills-lock.json
 .kilo
 .models-exemple
@@ -129,12 +128,15 @@ graphify_detect.json
 .graphify_python
 
 #-------------bmad--------------------
-/docs
+/docs/*
 _bmad
 _bmad-output
 _bmad/
 _bmad-output/
 /labs
+!/docs/superpowers/
+docs/superpowers/*
+!/docs/superpowers/README.md
 
 #-------------exemples--------------------
 makefile
