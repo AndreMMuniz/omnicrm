@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
@@ -99,13 +100,15 @@ export default function SideNavBar() {
     <nav className="hidden h-full w-[272px] shrink-0 flex-col border-r border-[#E9ECEF] bg-white md:flex">
       <div className="border-b border-[#E9ECEF] px-4 py-4">
         <Link href="/dashboard" className="flex items-center gap-3 rounded-2xl bg-indigo-600 px-3 py-3 text-white shadow-sm">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/15">
-            <span
-              className="material-symbols-outlined text-white text-[22px]"
-              style={{ fontVariationSettings: "'FILL' 1" }}
-            >
-              support_agent
-            </span>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white/15">
+            <Image
+              src="/icon.svg"
+              alt="omnicrm.chat"
+              width={32}
+              height={32}
+              className="h-8 w-8"
+              priority
+            />
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold leading-none">omnicrm.chat</p>
