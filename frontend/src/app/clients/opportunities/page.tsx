@@ -4,8 +4,8 @@ export default function ClientOpportunitiesPage() {
   return (
     <ClientsWorkspacePlaceholder
       title="Opportunities"
-      summary="Esta rota abre o espaco para a futura gestao comercial em formato de tabela e side panel."
-      description="O objetivo aqui e convergir para o mesmo padrao do Twenty, com lista persistente e detalhe lateral."
+      summary="This route opens the space for the future commercial opportunities workspace using a list-plus-detail layout."
+      description="The goal here is to converge on the same Twenty-inspired pattern, with a persistent list and a lateral detail surface."
     />
   );
 }

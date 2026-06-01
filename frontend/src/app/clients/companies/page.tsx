@@ -4,8 +4,8 @@ export default function ClientCompaniesPage() {
   return (
     <ClientsWorkspacePlaceholder
       title="Companies"
-      summary="Esta rota prepara o novo workspace de empresas no padrao inspirado no Twenty: tabela a esquerda e detalhe contextual a direita."
-      description="Na proxima fase, esta tela vai adotar o shell de CRM com filtros, tabela e painel lateral de detalhe."
+      summary="This route prepares the new companies workspace in a Twenty-inspired pattern: a persistent list on the left and contextual detail on the right."
+      description="In the next phase, this screen will evolve into the CRM shell with filters, a structured table, and a side detail panel."
     />
   );
 }
