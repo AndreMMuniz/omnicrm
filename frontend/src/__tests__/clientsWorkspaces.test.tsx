@@ -8,9 +8,30 @@ import OpportunitiesPage from "@/app/clients/opportunities/page";
 import { ClientsWorkspacePlaceholder } from "@/components/clients/ClientsWorkspacePlaceholder";
 
 const redirectMock = vi.fn();
+const replaceMock = vi.fn();
 
 vi.mock("next/navigation", () => ({
   redirect: (href: string) => redirectMock(href),
+  useRouter: () => ({ replace: replaceMock }),
+  useSearchParams: () => new URLSearchParams(""),
+}));
+
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({
+    user: { id: "user-1", full_name: "Owner User" },
+  }),
+}));
+
+vi.mock("@/lib/api", () => ({
+  clientsApi: {
+    listClients: vi.fn().mockResolvedValue({ data: [] }),
+    getClient: vi.fn(),
+    createClient: vi.fn(),
+    updateClient: vi.fn(),
+  },
+  usersApi: {
+    listUsers: vi.fn().mockResolvedValue({ data: [] }),
+  },
 }));
 
 describe("clients workspace routes", () => {
@@ -20,12 +41,12 @@ describe("clients workspace routes", () => {
     expect(redirectMock).toHaveBeenCalledWith("/clients/companies");
   });
 
-  it("renders a dedicated Companies workspace instead of the legacy Clients page", () => {
+  it("renders a dedicated Companies workspace instead of the legacy Clients page", async () => {
     render(<CompaniesPage />);
 
-    expect(screen.getByRole("heading", { name: "Companies workspace" }).textContent).toBe("Companies workspace");
-    expect(screen.queryByRole("heading", { name: "Clients" })).toBeNull();
-    expect(screen.queryByText("Search by name or company...")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Companies" }).textContent).toBe("Companies");
+    expect(await screen.findByText("Manage company accounts with a split-view CRM workspace.")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Search by company, trade name, owner, or country...")).toBeTruthy();
   });
 
   it("renders the People workspace placeholder with a normal-width content card", () => {

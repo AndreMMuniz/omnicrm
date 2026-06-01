@@ -16,6 +16,7 @@ class ClientBase(BaseModel):
     website: Optional[str] = None
     notes: Optional[str] = None
     contact_id: Optional[UUID] = None
+    owner_user_id: Optional[UUID] = None
 
     @field_validator("company_name", "website", "notes", "tax_id", mode="before")
     @classmethod
@@ -46,6 +47,7 @@ class ClientUpdate(BaseModel):
     website: Optional[str] = None
     notes: Optional[str] = None
     contact_id: Optional[UUID] = None
+    owner_user_id: Optional[UUID] = None
 
     @field_validator("company_name", "website", "notes", "tax_id", mode="before")
     @classmethod
@@ -58,6 +60,8 @@ class ClientUpdate(BaseModel):
 class ClientResponse(ClientBase):
     id: UUID
     created_by_user_id: UUID
+    owner_name: Optional[str] = None
+    created_by_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime] = None
@@ -72,7 +76,11 @@ class ClientListResponse(BaseModel):
     country: str
     client_type: str
     currency: str
+    website: Optional[str] = None
+    owner_user_id: Optional[UUID] = None
+    owner_name: Optional[str] = None
     created_at: datetime
+    updated_at: datetime
     deleted_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}

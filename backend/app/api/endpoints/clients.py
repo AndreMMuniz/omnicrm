@@ -18,17 +18,71 @@ from app.schemas.client import (
     ClientResponse,
     ClientUpdate,
 )
-from app.schemas.common import create_error_response, create_paginated_response, create_response
+from app.schemas.common import create_paginated_response, create_response
 from app.services.customer_timeline_service import build_client_timeline
 
 router = APIRouter()
 
 
 def _get_client_or_404(client_id: UUID, db: Session) -> Client:
-    client = db.query(Client).filter(Client.id == client_id, Client.deleted_at.is_(None)).first()
+    client = (
+        db.query(Client)
+        .options(joinedload(Client.owner), joinedload(Client.created_by))
+        .filter(Client.id == client_id, Client.deleted_at.is_(None))
+        .first()
+    )
     if not client:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
     return client
+
+
+def _ensure_client_owner_exists(owner_user_id: Optional[UUID], db: Session) -> None:
+    if not owner_user_id:
+        return
+
+    owner = db.query(User).filter(User.id == owner_user_id, User.is_active.is_(True)).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Owner user not found")
+
+
+def _serialize_client_list_row(client: Client) -> ClientListResponse:
+    return ClientListResponse(
+        id=client.id,
+        name=client.name,
+        company_name=client.company_name,
+        country=client.country,
+        client_type=client.client_type.value if hasattr(client.client_type, "value") else client.client_type,
+        currency=client.currency,
+        website=client.website,
+        owner_user_id=client.owner_user_id,
+        owner_name=client.owner.full_name if client.owner else None,
+        created_at=client.created_at,
+        updated_at=client.updated_at,
+        deleted_at=client.deleted_at,
+    )
+
+
+def _serialize_client(client: Client) -> ClientResponse:
+    return ClientResponse(
+        id=client.id,
+        name=client.name,
+        country=client.country,
+        client_type=client.client_type.value if hasattr(client.client_type, "value") else client.client_type,
+        tax_id=client.tax_id,
+        tax_id_type=client.tax_id_type,
+        currency=client.currency,
+        company_name=client.company_name,
+        website=client.website,
+        notes=client.notes,
+        contact_id=client.contact_id,
+        owner_user_id=client.owner_user_id,
+        owner_name=client.owner.full_name if client.owner else None,
+        created_by_user_id=client.created_by_user_id,
+        created_by_name=client.created_by.full_name if client.created_by else None,
+        created_at=client.created_at,
+        updated_at=client.updated_at,
+        deleted_at=client.deleted_at,
+    )
 
 
 @router.get("/clients")
@@ -43,7 +97,11 @@ async def list_clients(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    query = db.query(Client).filter(Client.deleted_at.is_(None))
+    query = (
+        db.query(Client)
+        .options(joinedload(Client.owner), joinedload(Client.created_by))
+        .filter(Client.deleted_at.is_(None))
+    )
 
     if search:
         pattern = f"%{search}%"
@@ -64,10 +122,10 @@ async def list_clients(
         query = query.filter(Client.country == country.upper())
 
     total = query.count()
-    clients = query.order_by(Client.name).offset(skip).limit(limit).all()
+    clients = query.order_by(Client.updated_at.desc(), Client.name.asc()).offset(skip).limit(limit).all()
 
     return create_paginated_response(
-        data=[ClientListResponse.model_validate(c) for c in clients],
+        data=[_serialize_client_list_row(c) for c in clients],
         total=total,
         page=(skip // limit) + 1,
         page_size=limit,
@@ -82,6 +140,8 @@ async def create_client(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    _ensure_client_owner_exists(payload.owner_user_id, db)
+
     client = Client(
         **payload.model_dump(exclude={"contact_id"}),
         contact_id=payload.contact_id,
@@ -90,7 +150,7 @@ async def create_client(
     db.add(client)
     db.commit()
     db.refresh(client)
-    return create_response(ClientResponse.model_validate(client))
+    return create_response(_serialize_client(_get_client_or_404(client.id, db)))
 
 
 @router.get("/clients/{client_id}")
@@ -102,7 +162,7 @@ async def get_client(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     client = _get_client_or_404(client_id, db)
-    return create_response(ClientResponse.model_validate(client))
+    return create_response(_serialize_client(client))
 
 
 @router.get("/clients/{client_id}/contacts")
@@ -147,25 +207,14 @@ async def update_client(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     client = _get_client_or_404(client_id, db)
-
-    if payload.email and payload.email != client.email:
-        conflict = db.query(Client).filter(
-            Client.email == payload.email,
-            Client.id != client_id,
-            Client.deleted_at.is_(None),
-        ).first()
-        if conflict:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Já existe outro cliente com o e-mail {payload.email}",
-            )
+    _ensure_client_owner_exists(payload.owner_user_id, db)
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(client, field, value)
 
     db.commit()
     db.refresh(client)
-    return create_response(ClientResponse.model_validate(client))
+    return create_response(_serialize_client(_get_client_or_404(client.id, db)))
 
 
 @router.delete("/clients/{client_id}", status_code=204)
@@ -177,12 +226,11 @@ async def delete_client(
     current_user: User = Depends(get_current_user),
 ) -> None:
     from datetime import datetime, timezone
+
     client = _get_client_or_404(client_id, db)
     client.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
-
-# ── Conversas vinculadas ao cliente ──────────────────────────────────────────
 
 @router.get("/clients/{client_id}/conversations")
 @limiter.limit("60/minute")
@@ -229,10 +277,8 @@ async def get_client_conversations(
     return create_paginated_response(data=data, total=total, page=(skip // limit) + 1, page_size=limit)
 
 
-# ── Vínculo contato ↔ cliente ─────────────────────────────────────────────────
-
 class ContactClientLinkRequest(BaseModel):
-    client_id: Optional[UUID] = None  # None = desvincular
+    client_id: Optional[UUID] = None
 
 
 @router.patch("/contacts/{contact_id}/client")
@@ -259,13 +305,8 @@ async def link_contact_to_client(
     contact.client_id = payload.client_id
     db.commit()
     db.refresh(contact)
-    return create_response({
-        "contact_id": str(contact.id),
-        "client_id": str(contact.client_id) if contact.client_id else None,
-    })
+    return create_response({"contact_id": str(contact.id), "client_id": str(contact.client_id) if contact.client_id else None})
 
-
-# ── Detecção de cliente para uma conversa ─────────────────────────────────────
 
 @router.get("/conversations/{conversation_id}/detect-client")
 @limiter.limit("60/minute")
@@ -275,27 +316,34 @@ async def detect_client_for_conversation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
-    if not conv:
+    conversation = (
+        db.query(Conversation)
+        .options(joinedload(Conversation.contact).joinedload(Contact.client))
+        .filter(Conversation.id == conversation_id)
+        .first()
+    )
+    if not conversation:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
-    contact = db.query(Contact).filter(Contact.id == conv.contact_id).first()
-    if not contact or not contact.client_id:
-        return create_response({"matches": [], "already_linked": False})
+    contact = conversation.contact
+    if not contact:
+        return create_response({"already_linked": False, "matches": []})
 
-    client = db.query(Client).filter(
-        Client.id == contact.client_id, Client.deleted_at.is_(None)
-    ).first()
+    client = contact.client
+    if client and client.deleted_at is None:
+        return create_response(
+            {
+                "already_linked": True,
+                "matches": [
+                    {
+                        "id": str(client.id),
+                        "name": client.name,
+                        "company_name": client.company_name,
+                        "country": client.country,
+                        "client_type": client.client_type.value if hasattr(client.client_type, "value") else client.client_type,
+                    }
+                ],
+            }
+        )
 
-    if not client:
-        return create_response({"matches": [], "already_linked": False})
-
-    return create_response({
-        "already_linked": True,
-        "matches": [{
-            "id": str(client.id),
-            "name": client.name,
-            "company_name": client.company_name,
-            "match_field": "linked",
-        }],
-    })
+    return create_response({"already_linked": False, "matches": []})

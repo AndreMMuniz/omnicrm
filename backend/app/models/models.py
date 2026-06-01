@@ -644,11 +644,13 @@ class Client(Base):
     website = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
     contact_id = Column(UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=True)
+    owner_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
     created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
+    owner = relationship("User", foreign_keys=[owner_user_id])
     created_by = relationship("User", foreign_keys=[created_by_user_id])
     contact = relationship("Contact", foreign_keys=[contact_id])
     proposals = relationship("Proposal", back_populates="client")

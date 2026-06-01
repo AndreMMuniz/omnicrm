@@ -12,7 +12,10 @@ export interface ClientDto {
   website?: string | null;
   notes?: string | null;
   contact_id?: string | null;
+  owner_user_id?: string | null;
+  owner_name?: string | null;
   created_by_user_id: string;
+  created_by_name?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -25,7 +28,11 @@ export interface ClientListDto {
   country: string;
   client_type: ClientType;
   currency: string;
+  website?: string | null;
+  owner_user_id?: string | null;
+  owner_name?: string | null;
   created_at: string;
+  updated_at: string;
   deleted_at?: string | null;
 }
 
@@ -49,6 +56,7 @@ export interface ClientCreateRequest {
   website?: string | null;
   notes?: string | null;
   contact_id?: string | null;
+  owner_user_id?: string | null;
 }
 
 export type ClientUpdateRequest = Partial<ClientCreateRequest>;
