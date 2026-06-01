@@ -109,7 +109,7 @@ export default function LoginPage() {
 
     try {
       await authApi.login(email, password);
-      window.location.href = "/dashboard";
+      window.location.href = "/projects";
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Connection error.");
     } finally {

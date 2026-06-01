@@ -2,21 +2,14 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { ADMIN_NAV_ITEMS, MAIN_NAV_ITEMS, type NavigationChildItem, type NavigationItem } from "@/config/adminNavigation";
-
-function isPathActive(pathname: string, path: string) {
-  return pathname === path || pathname.startsWith(`${path}/`);
-}
+import { getInitialExpandedGroups, isItemActive } from "@/lib/navigation";
 
 function isChildActive(currentRoute: string, childHref: string) {
   return currentRoute === childHref;
-}
-
-function isItemActive(pathname: string, item: NavigationItem) {
-  const paths = item.activePaths ?? [item.href];
-  return paths.some((path) => isPathActive(pathname, path));
 }
 
 export default function SideNavBar() {
@@ -30,8 +23,18 @@ export default function SideNavBar() {
     : search
       ? `${pathname}?${search}`
       : pathname;
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() =>
+    getInitialExpandedGroups([...MAIN_NAV_ITEMS, ...ADMIN_NAV_ITEMS], pathname),
+  );
 
   const visibleAdminItems = ADMIN_NAV_ITEMS.filter((item) => item.visible?.(user) ?? true);
+
+  useEffect(() => {
+    const initialGroups = getInitialExpandedGroups([...MAIN_NAV_ITEMS, ...visibleAdminItems], pathname);
+    setExpandedGroups((current) => ({ ...initialGroups, ...current, ...Object.fromEntries(
+      Object.entries(initialGroups).filter(([, isExpanded]) => isExpanded),
+    ) }));
+  }, [pathname, visibleAdminItems]);
 
   const handleLogout = async () => {
     await logout();
@@ -59,33 +62,63 @@ export default function SideNavBar() {
 
   const renderItem = (item: NavigationItem) => {
     const active = isItemActive(pathname, item);
-    const showChildren = active && item.children && item.children.length > 0;
+    const hasChildren = Boolean(item.children?.length);
+    const showChildren = hasChildren && expandedGroups[item.href];
+    const toggleGroup = () => {
+      if (!hasChildren) return;
+      setExpandedGroups((current) => ({
+        ...current,
+        [item.href]: !current[item.href],
+      }));
+    };
 
     return (
       <div key={item.href} className="w-full">
-        <Link
-          href={item.href}
-          title={item.title}
-          className={`relative flex min-h-12 items-center gap-3 rounded-2xl px-3 py-3 transition-colors ${
-            active
-              ? "bg-indigo-50 text-indigo-700"
-              : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
-          }`}
-        >
-          {active && <span className="absolute left-0 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full bg-indigo-600" />}
-          <span
-            className="material-symbols-outlined text-[22px]"
-            style={active ? { fontVariationSettings: "'FILL' 1" } : {}}
+        {hasChildren ? (
+          <button
+            type="button"
+            title={item.title}
+            onClick={toggleGroup}
+            className={`relative flex min-h-12 w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition-colors ${
+              active
+                ? "bg-indigo-50 text-indigo-700"
+                : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
           >
-            {item.icon}
-          </span>
-          <span className="min-w-0 flex-1 text-sm font-semibold">{item.title}</span>
-          {item.children && item.children.length > 0 && (
-            <span className="material-symbols-outlined text-[18px] text-slate-400">
+            {active && <span className="absolute left-0 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full bg-indigo-600" />}
+            <span
+              className="material-symbols-outlined text-[22px]"
+              style={active ? { fontVariationSettings: "'FILL' 1" } : {}}
+            >
+              {item.icon}
+            </span>
+            <span className="min-w-0 flex-1 text-sm font-semibold">{item.title}</span>
+            <span className={`material-symbols-outlined text-[18px] text-slate-400 transition-transform ${
+              showChildren ? "rotate-180" : ""
+            }`}>
               expand_more
             </span>
-          )}
-        </Link>
+          </button>
+        ) : (
+          <Link
+            href={item.href}
+            title={item.title}
+            className={`relative flex min-h-12 items-center gap-3 rounded-2xl px-3 py-3 transition-colors ${
+              active
+                ? "bg-indigo-50 text-indigo-700"
+                : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
+          >
+            {active && <span className="absolute left-0 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full bg-indigo-600" />}
+            <span
+              className="material-symbols-outlined text-[22px]"
+              style={active ? { fontVariationSettings: "'FILL' 1" } : {}}
+            >
+              {item.icon}
+            </span>
+            <span className="min-w-0 flex-1 text-sm font-semibold">{item.title}</span>
+          </Link>
+        )}
 
         {showChildren && (
           <div className="mt-2 space-y-1 border-l border-slate-200 pl-4 ml-5">
@@ -99,7 +132,7 @@ export default function SideNavBar() {
   return (
     <nav className="hidden h-full w-[272px] shrink-0 flex-col border-r border-[#E9ECEF] bg-white md:flex">
       <div className="border-b border-[#E9ECEF] px-4 py-4">
-        <Link href="/dashboard" className="flex items-center gap-3 rounded-2xl bg-indigo-600 px-3 py-3 text-white shadow-sm">
+        <Link href="/projects" className="flex items-center gap-3 rounded-2xl bg-indigo-600 px-3 py-3 text-white shadow-sm">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white/15">
             <Image
               src="/icon.svg"

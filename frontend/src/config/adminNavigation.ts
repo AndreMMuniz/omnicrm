@@ -16,10 +16,20 @@ export type NavigationItem = {
 };
 
 export const MAIN_NAV_ITEMS: NavigationItem[] = [
-  { href: "/dashboard", icon: "dashboard", title: "Dashboard" },
+  { href: "/projects", icon: "view_kanban", title: "Pipeline", activePaths: ["/projects"] },
   { href: "/messages", icon: "chat_bubble", title: "Messages" },
-  { href: "/projects", icon: "view_kanban", title: "Projects" },
-  { href: "/clients", icon: "groups", title: "Clients" },
+  { href: "/dashboard", icon: "dashboard", title: "Dashboard" },
+  {
+    href: "/clients",
+    icon: "groups",
+    title: "Clients",
+    activePaths: ["/clients", "/clients/companies", "/clients/people", "/clients/opportunities"],
+    children: [
+      { href: "/clients/companies", label: "Companies", icon: "domain" },
+      { href: "/clients/people", label: "People", icon: "person" },
+      { href: "/clients/opportunities", label: "Opportunities", icon: "target" },
+    ],
+  },
   { href: "/proposals", icon: "request_quote", title: "Proposals" },
   { href: "/catalog", icon: "inventory_2", title: "Catalog" },
   { href: "/tasks", icon: "task", title: "Tasks" },
