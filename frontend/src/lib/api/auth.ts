@@ -30,15 +30,34 @@ function extractError(json: unknown, fallback: string): string {
   return fallback;
 }
 
+function getLoginFallback(status: number): string {
+  if (status >= 500) {
+    return "Login service is temporarily unavailable. Please try again in a moment.";
+  }
+
+  if (status === 401) {
+    return "Invalid email or password";
+  }
+
+  return "Failed to sign in";
+}
+
 export async function login(email: string, password: string): Promise<AuthPayload> {
-  const res = await fetch(`${BASE}/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
+  let res: Response;
+
+  try {
+    res = await fetch(`${BASE}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch {
+    throw new Error("Unable to reach the login service. Check your connection and try again.");
+  }
+
   const json = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error(extractError(json, "Invalid email or password"));
+    throw new Error(extractError(json, getLoginFallback(res.status)));
   }
   const payload: AuthPayload = json?.data ?? json;
   if (!payload?.access_token) throw new Error("No token received");
