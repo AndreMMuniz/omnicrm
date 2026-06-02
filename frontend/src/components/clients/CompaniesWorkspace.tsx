@@ -222,7 +222,7 @@ export function CompaniesWorkspace() {
     setLoadingList(true);
     setError(null);
     try {
-      const response = await clientsApi.listClients({ client_type: "company", limit: 200, search });
+      const response = await clientsApi.listClients({ client_type: "company", limit: 200, search, country });
       setCompanies(response.data ?? []);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load companies.");
@@ -258,7 +258,7 @@ export function CompaniesWorkspace() {
   useEffect(() => {
     void loadCompanies();
     void loadOwners();
-  }, [search]);
+  }, [search, country]);
 
   useEffect(() => {
     setCreateDraft(createEmptyDraft(user?.id ?? ""));

@@ -84,6 +84,15 @@ describe("companiesWorkspace helpers", () => {
         country: "",
       }),
     ).toBe(false);
+
+    expect(
+      isCompanyRowMatch(rows[1], {
+        search: "",
+        quickFilter: "all",
+        currentUserId: "owner-1",
+        country: "us",
+      }),
+    ).toBe(false);
   });
 
   it("sorts rows by workspace sort mode", () => {

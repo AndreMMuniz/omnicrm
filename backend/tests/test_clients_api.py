@@ -70,6 +70,57 @@ def test_list_clients_returns_owner_metadata_for_companies(db):
     assert payload["owner_name"] == "Owner User"
 
 
+def test_list_clients_search_matches_owner_name_and_country(db):
+    current_user = _seed_user(db, "current@example.com", "Current User")
+    owner = _seed_user(db, "owner@example.com", "Owner User")
+    company = Client(
+        name="Acme",
+        client_type="company",
+        country="BR",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+        owner_user_id=owner.id,
+    )
+    db.add(company)
+    db.commit()
+
+    client = _make_client(db, current_user)
+
+    owner_response = client.get("/api/v1/admin/clients", params={"client_type": "company", "search": "Owner User"})
+    assert owner_response.status_code == 200
+    assert [row["id"] for row in owner_response.json()["data"]] == [str(company.id)]
+
+    country_response = client.get("/api/v1/admin/clients", params={"client_type": "company", "search": "BR"})
+    assert country_response.status_code == 200
+    assert [row["id"] for row in country_response.json()["data"]] == [str(company.id)]
+
+
+def test_list_clients_filters_by_country(db):
+    current_user = _seed_user(db, "current@example.com", "Current User")
+    br_company = Client(
+        name="Acme BR",
+        client_type="company",
+        country="BR",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    us_company = Client(
+        name="Acme US",
+        client_type="company",
+        country="US",
+        currency="USD",
+        created_by_user_id=current_user.id,
+    )
+    db.add_all([br_company, us_company])
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get("/api/v1/admin/clients", params={"client_type": "company", "country": "br"})
+
+    assert response.status_code == 200
+    assert [row["id"] for row in response.json()["data"]] == [str(br_company.id)]
+
+
 def test_get_client_returns_owner_and_creator_metadata(db):
     current_user = _seed_user(db, "current@example.com", "Current User")
     owner = _seed_user(db, "owner@example.com", "Owner User")
