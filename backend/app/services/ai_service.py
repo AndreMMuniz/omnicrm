@@ -19,8 +19,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.models.models import Message, AISuggestion, GeneralSettings, Conversation
+from app.models.models import Message, AISuggestion, Conversation
 
 
 SYSTEM_PROMPT = """You are an AI assistant helping a customer support agent draft replies.
@@ -49,23 +48,10 @@ class AIService:
     # ── Settings access ───────────────────────────────────────────────────────
 
     def _get_llm(self):
-        """Instantiate LLM from GeneralSettings + env API key."""
-        from langchain_openai import ChatOpenAI
+        """Instantiate LLM from the shared provider/key resolution path."""
+        from src.shared.llm import get_llm
 
-        cfg = self.db.query(GeneralSettings).first()
-        model = (cfg.ai_model if cfg and cfg.ai_model else "gpt-4o-mini")
-        provider = (cfg.ai_provider if cfg and cfg.ai_provider else "openrouter")
-        api_key = settings.OPENAI_API_KEY
-
-        if provider == "openrouter":
-            return ChatOpenAI(
-                model=model,
-                openai_api_key=api_key,
-                openai_api_base="https://openrouter.ai/api/v1",
-                max_tokens=300,
-                temperature=0.7,
-            )
-        return ChatOpenAI(model=model, openai_api_key=api_key, max_tokens=300, temperature=0.7)
+        return get_llm(self.db)
 
     # ── Context builder ───────────────────────────────────────────────────────
 
