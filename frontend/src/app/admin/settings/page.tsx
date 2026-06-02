@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import ConfigAreaShell from "@/components/admin/ConfigAreaShell";
 import { settingsApi } from "@/lib/api/index";
 import type { Settings } from "@/types/settings";
 import QuickRepliesPage from "@/app/admin/quick-replies/page";
 
-type TabId = "general" | "visual" | "ai" | "api" | "quick-replies";
-const ALLOWED_TABS: TabId[] = ["general", "visual", "ai", "api", "quick-replies"];
+type TabId = "general" | "visual" | "ai" | "quick-replies";
+const ALLOWED_TABS: TabId[] = ["general", "visual", "ai", "quick-replies"];
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -27,22 +27,6 @@ function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={inputCls} />;
 }
 
-function PasswordInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  const [show, setShow] = useState(false);
-  return (
-    <div className="relative">
-      <input {...props} type={show ? "text" : "password"} className={inputCls + " pr-11"} />
-      <button
-        type="button"
-        onClick={() => setShow((v) => !v)}
-        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-      >
-        <span className="material-symbols-outlined text-[20px]">{show ? "visibility_off" : "visibility"}</span>
-      </button>
-    </div>
-  );
-}
-
 function SectionCard({ title, badge, children }: { title: string; badge?: string; children: React.ReactNode }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-[#E9ECEF] bg-white shadow-sm">
@@ -59,41 +43,7 @@ function SectionCard({ title, badge, children }: { title: string; badge?: string
   );
 }
 
-function ApiGroup({
-  icon,
-  label,
-  color,
-  configured,
-  children,
-}: {
-  icon: string;
-  label: string;
-  color: string;
-  configured: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="overflow-hidden rounded-2xl border border-[#E9ECEF]">
-      <div className={`flex items-center gap-3 px-5 py-3 ${color}`}>
-        <span className="material-symbols-outlined text-[22px]" style={{ fontVariationSettings: "'FILL' 1" }}>
-          {icon}
-        </span>
-        <span className="text-sm font-semibold">{label}</span>
-        <span
-          className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-            configured ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
-          }`}
-        >
-          {configured ? "Configured" : "Not configured"}
-        </span>
-      </div>
-      <div className="grid grid-cols-1 gap-5 bg-white p-5 md:grid-cols-2">{children}</div>
-    </div>
-  );
-}
-
 export default function SettingsPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const searchTab = searchParams.get("tab");
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -194,21 +144,8 @@ export default function SettingsPage() {
   }
 
   const s = settings;
-  const telegramConfigured = !!s.telegram_bot_token;
-  const whatsappConfigured = !!(s.whatsapp_phone_id && s.whatsapp_access_token);
-  const emailConfigured = !!(s.email_address && s.email_password);
-  const smsConfigured = !!(s.twilio_account_sid && s.twilio_auth_token);
-  const backendApiUrl = process.env.NEXT_PUBLIC_API_URL ?? "https://your-backend.railway.app/api/v1";
-  const backendOrigin = backendApiUrl.replace(/\/api\/v1\/?$/, "");
-  const whatsappWebhookUrl = `${backendOrigin}/api/v1/whatsapp/webhook`;
   return (
-    <ConfigAreaShell
-      activeSection={activeTab}
-      onSectionChange={(section) => {
-        const nextTab = section as TabId;
-        router.replace(`/admin/settings?tab=${nextTab}`);
-      }}
-    >
+    <ConfigAreaShell>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-slate-50">
         <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center border-b border-[#E9ECEF] bg-white px-6">
           <h1 className="text-[18px] font-semibold text-slate-900">Platform Configuration</h1>
@@ -315,47 +252,6 @@ export default function SettingsPage() {
                     </p>
                   </div>
                 </SectionCard>
-              )}
-
-              {activeTab === "api" && (
-                <div className="space-y-5">
-                  <p className="text-sm text-slate-500">
-                    Keep shared webhook and integration details in one place. Channel credentials are managed in the backend environment.
-                  </p>
-
-                  <ApiGroup
-                    icon="api"
-                    label="Webhook Endpoints"
-                    color="border-b border-indigo-100 bg-indigo-50 text-indigo-800"
-                    configured={whatsappConfigured}
-                  >
-                    <Field label="Backend Base URL" hint="Used as the base for webhook registration and channel callbacks">
-                      <div className="flex h-11 items-center rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
-                        {backendOrigin}
-                      </div>
-                    </Field>
-                    <Field label="WhatsApp Webhook URL" hint="Copy this URL into your Meta App Webhooks configuration">
-                      <div className="flex items-center gap-2">
-                        <input
-                          readOnly
-                          value={whatsappWebhookUrl}
-                          className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600 select-all"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => navigator.clipboard.writeText(whatsappWebhookUrl)}
-                          className="shrink-0 rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
-                          title="Copy to clipboard"
-                        >
-                          <span className="material-symbols-outlined text-[18px]">content_copy</span>
-                        </button>
-                      </div>
-                    </Field>
-                    <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 px-4 py-3 text-sm text-indigo-900 md:col-span-2">
-                      Treat this section as operational reference for deployments and third-party setup. Channel credentials stay outside the admin UI.
-                    </div>
-                  </ApiGroup>
-                </div>
               )}
 
               <div className="flex items-center justify-end gap-3 border-t border-[#E9ECEF] pt-2">

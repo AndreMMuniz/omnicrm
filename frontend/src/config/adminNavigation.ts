@@ -62,7 +62,6 @@ export const ADMIN_NAV_ITEMS: NavigationItem[] = [
       { href: "/admin/settings?tab=general", label: "General", icon: "tune" },
       { href: "/admin/settings?tab=visual", label: "Visual Identity", icon: "palette" },
       { href: "/admin/settings?tab=ai", label: "AI Configuration", icon: "smart_toy" },
-      { href: "/admin/settings?tab=api", label: "API Settings", icon: "api" },
       { href: "/admin/settings?tab=quick-replies", label: "Quick Replies", icon: "quick_phrases" },
     ],
     visible: (user) => !!user?.user_type?.can_change_settings,
