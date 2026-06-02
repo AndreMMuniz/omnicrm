@@ -971,6 +971,151 @@ def test_get_conversation_linked_artifacts_surfaces_missing_linkage_gaps(db):
     }
 
 
+def test_get_conversation_linked_artifacts_uses_project_client_when_contact_is_not_linked(db):
+    from datetime import datetime, timedelta, timezone
+
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    _seed_project_stage(db, "lead", "Lead", 1)
+
+    linked_client = Client(
+        name="Acme",
+        company_name="Acme Corp",
+        country="BR",
+        client_type="company",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(linked_client)
+    db.flush()
+
+    contact = Contact(
+        name="Ana",
+        email="ana@acme.com",
+        phone="+5511888888888",
+        channel_identifier="ana-acme",
+    )
+    db.add(contact)
+    db.flush()
+
+    base_time = datetime.now(timezone.utc) - timedelta(days=1)
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+        created_at=base_time,
+        updated_at=base_time,
+    )
+    db.add(conversation)
+    db.flush()
+
+    project = Project(
+        title="Implementation rollout",
+        description="Scoped delivery project",
+        stage="lead",
+        status=ProjectStatus.OPEN,
+        priority=ProjectPriority.HIGH,
+        source_type=ProjectSourceType.MANUAL,
+        client_id=linked_client.id,
+        contact_id=contact.id,
+        created_by_user_id=current_user.id,
+        source_conversation_id=conversation.id,
+        created_at=base_time + timedelta(hours=1),
+        updated_at=base_time + timedelta(hours=2),
+    )
+    db.add(project)
+    db.flush()
+    conversation.project_context_id = project.id
+
+    proposal = Proposal(
+        title="Renewal proposal",
+        customer_name="Acme",
+        status=ProposalStatus.SENT,
+        total_amount=150000,
+        client_id=linked_client.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=1),
+        updated_at=base_time + timedelta(hours=3),
+    )
+    db.add(proposal)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/chat/conversations/{conversation.id}/linked-artifacts")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    references = {artifact["reference"] for artifact in payload["artifacts"]}
+
+    assert payload["client_id"] == str(linked_client.id)
+    assert proposal.reference_code in references
+    assert "missing_client_link" not in {gap["code"] for gap in payload["gaps"]}
+
+
+def test_get_conversation_linked_artifacts_does_not_flag_missing_project_context_when_direct_project_exists(db):
+    from datetime import datetime, timedelta, timezone
+
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    _seed_project_stage(db, "lead", "Lead", 1)
+
+    linked_client = Client(
+        name="Acme",
+        company_name="Acme Corp",
+        country="BR",
+        client_type="company",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(linked_client)
+    db.flush()
+
+    contact = Contact(
+        name="Ana",
+        email="ana@acme.com",
+        phone="+5511888888888",
+        channel_identifier="ana-acme",
+        client_id=linked_client.id,
+    )
+    db.add(contact)
+    db.flush()
+
+    base_time = datetime.now(timezone.utc) - timedelta(days=1)
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+        created_at=base_time,
+        updated_at=base_time,
+    )
+    db.add(conversation)
+    db.flush()
+
+    direct_project = Project(
+        title="Follow-up workstream",
+        description="Created from the inbound request",
+        stage="lead",
+        status=ProjectStatus.OPEN,
+        priority=ProjectPriority.MEDIUM,
+        source_type=ProjectSourceType.MESSAGE,
+        source_conversation_id=conversation.id,
+        client_id=linked_client.id,
+        contact_id=contact.id,
+        created_by_user_id=current_user.id,
+        created_at=base_time + timedelta(hours=1),
+        updated_at=base_time + timedelta(hours=2),
+    )
+    db.add(direct_project)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/chat/conversations/{conversation.id}/linked-artifacts")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert "missing_project_context" not in {gap["code"] for gap in payload["gaps"]}
+
+
 def test_get_client_timeline_includes_conversation_and_related_records(db):
     from datetime import datetime, timedelta, timezone
 

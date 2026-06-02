@@ -181,13 +181,45 @@ def _serialize_status(value: object) -> str:
 
 def _linked_client_for_conversation(db: Session, conversation: Conversation) -> Optional[Client]:
     contact = conversation.contact
-    if not contact or not getattr(contact, "client_id", None):
-        return None
-    return (
-        db.query(Client)
-        .filter(Client.id == contact.client_id, Client.deleted_at.is_(None))
-        .first()
-    )
+    candidate_client_ids: list[UUID] = []
+
+    if contact and getattr(contact, "client_id", None):
+        candidate_client_ids.append(contact.client_id)
+
+    if conversation.project_context_id:
+        project_client_id = (
+            db.query(Project.client_id)
+            .filter(Project.id == conversation.project_context_id, Project.client_id.is_not(None))
+            .scalar()
+        )
+        if project_client_id and project_client_id not in candidate_client_ids:
+            candidate_client_ids.append(project_client_id)
+
+    if not candidate_client_ids:
+        project_client_rows = (
+            db.query(Project.client_id)
+            .outerjoin(Message, Message.id == Project.source_message_id)
+            .filter(
+                Project.client_id.is_not(None),
+                (Project.source_conversation_id == conversation.id) | (Message.conversation_id == conversation.id),
+            )
+            .order_by(Project.updated_at.desc())
+            .all()
+        )
+        for (project_client_id,) in project_client_rows:
+            if project_client_id and project_client_id not in candidate_client_ids:
+                candidate_client_ids.append(project_client_id)
+
+    for client_id in candidate_client_ids:
+        linked_client = (
+            db.query(Client)
+            .filter(Client.id == client_id, Client.deleted_at.is_(None))
+            .first()
+        )
+        if linked_client:
+            return linked_client
+
+    return None
 
 
 def build_conversation_linked_artifacts(
@@ -314,7 +346,7 @@ def build_conversation_linked_artifacts(
                 description="Link a client to surface proposal context related to this conversation.",
             )
         )
-    if not has_project_context:
+    if not has_project_context and not has_direct_artifact:
         gaps.append(
             ConversationLinkedArtifactGapResponse(
                 code="missing_project_context",
