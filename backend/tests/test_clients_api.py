@@ -1,10 +1,58 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.api.api import api_router
 from app.core.auth import get_current_user
-from app.core.database import get_db
-from app.models.models import Client, DefaultRole, User, UserType
+from app.core.database import Base, get_db
+from app.models.models import Client, Contact, Conversation, DefaultRole, Project, Proposal, User, UserType
+
+
+TEST_DB_URL = "sqlite://"
+engine = create_engine(
+    TEST_DB_URL,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+@pytest.fixture(scope="function")
+def db():
+    tables = [
+        UserType.__table__,
+        User.__table__,
+        Client.__table__,
+        Contact.__table__,
+        Conversation.__table__,
+        Project.__table__,
+        Proposal.__table__,
+    ]
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        Base.metadata.drop_all(bind=connection, tables=tables)
+        Base.metadata.create_all(bind=connection, tables=tables)
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            Base.metadata.drop_all(bind=connection, tables=tables)
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 
 def _seed_user(db, email: str, name: str, *, is_active: bool = True) -> User:

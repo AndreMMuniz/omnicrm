@@ -105,6 +105,7 @@ def _serialize_client(client: Client) -> ClientResponse:
 def _serialize_people_row(
     contact: Contact,
     *,
+    active_client_id: Optional[UUID],
     client_name: Optional[str],
     client_company_name: Optional[str],
     last_conversation_at,
@@ -117,7 +118,7 @@ def _serialize_people_row(
         phone=contact.phone,
         avatar=contact.avatar,
         channel_identifier=contact.channel_identifier,
-        client_id=contact.client_id,
+        client_id=active_client_id,
         client_name=client_name,
         client_company_name=client_company_name,
         created_at=contact.created_at,
@@ -193,6 +194,7 @@ async def list_people(
     query = (
         db.query(
             Contact,
+            Client.id.label("active_client_id"),
             Client.name.label("client_name"),
             Client.company_name.label("client_company_name"),
             last_conversation_at.label("last_conversation_at"),
@@ -233,12 +235,13 @@ async def list_people(
         data=[
             _serialize_people_row(
                 contact,
+                active_client_id=active_client_id,
                 client_name=client_name,
                 client_company_name=client_company_name,
                 last_conversation_at=row_last_conversation_at,
                 conversation_count=row_conversation_count,
             )
-            for contact, client_name, client_company_name, row_last_conversation_at, row_conversation_count in rows
+            for contact, active_client_id, client_name, client_company_name, row_last_conversation_at, row_conversation_count in rows
         ],
         total=total,
         page=(skip // limit) + 1,
