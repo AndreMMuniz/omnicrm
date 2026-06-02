@@ -158,7 +158,7 @@ describe("clients workspace routes", () => {
     expect(screen.getByRole("heading", { name: "Opportunities" }).textContent).toBe("Opportunities");
     expect((await screen.findAllByText("Expansion Retainer")).length).toBeGreaterThan(0);
     expect(screen.getByPlaceholderText("Search by company, project, owner, or proposal signal...")).toBeTruthy();
-    expect(screen.getByRole("columnheader", { name: "Proposal signal" }).textContent).toBe("Proposal signal");
+    expect(screen.getByRole("columnheader", { name: "Account proposal context" }).textContent).toBe("Account proposal context");
   });
 
   it("keeps the shared placeholder card wide enough for readable text", () => {

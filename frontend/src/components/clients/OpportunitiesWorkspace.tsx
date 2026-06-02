@@ -16,7 +16,7 @@ type OpportunitySummary = {
   companyId: string | null;
   companyLabel: string;
   ownerLabel: string;
-  relatedProposals: ProposalDto[];
+  accountProposals: ProposalDto[];
   proposalSignal: string;
   nextAction: string;
 };
@@ -61,10 +61,9 @@ function formatCurrency(value: number | null | undefined) {
 }
 
 function buildProposalCreateHref(opportunity: OpportunitySummary) {
-  if (!opportunity.companyId) return "/proposals?create=1";
   const params = new URLSearchParams({
     create: "1",
-    clientId: opportunity.companyId,
+    clientId: opportunity.companyId ?? "",
     title: opportunity.project.title,
   });
   return `/proposals?${params.toString()}`;
@@ -72,11 +71,11 @@ function buildProposalCreateHref(opportunity: OpportunitySummary) {
 
 function getProposalSignal(proposals: ProposalDto[], hasCompany: boolean) {
   if (!hasCompany) return "Link company first";
-  if (proposals.some((proposal) => proposal.status === "approved")) return "Approved proposal";
-  if (proposals.some((proposal) => proposal.status === "sent")) return "Sent proposal";
-  if (proposals.some((proposal) => proposal.status === "draft")) return "Draft proposal";
-  if (proposals.some((proposal) => proposal.status === "rejected" || proposal.status === "cancelled")) return "Needs proposal rework";
-  if (proposals.length > 0) return `${proposals.length} proposal records`;
+  if (proposals.some((proposal) => proposal.status === "approved")) return "Account has approved proposal";
+  if (proposals.some((proposal) => proposal.status === "sent")) return "Account has sent proposal";
+  if (proposals.some((proposal) => proposal.status === "draft")) return "Account has draft proposal";
+  if (proposals.some((proposal) => proposal.status === "rejected" || proposal.status === "cancelled")) return "Account proposal needs rework";
+  if (proposals.length > 0) return `${proposals.length} account proposal records`;
   return "No proposal yet";
 }
 
@@ -84,8 +83,8 @@ function getNextAction(project: ProjectDto, proposals: ProposalDto[], hasCompany
   if (!hasCompany) return "Link a company before commercial follow-up.";
   if (project.stage === "lead") return "Qualify the account and confirm scope.";
   if (project.stage === "qualification" && proposals.length === 0) return "Create the first proposal draft.";
-  if (proposals.some((proposal) => proposal.status === "sent")) return "Follow up on the sent proposal.";
-  if (proposals.some((proposal) => proposal.status === "approved")) return "Move the opportunity toward delivery handoff.";
+  if (proposals.some((proposal) => proposal.status === "sent")) return "Review account proposal context before the next follow-up.";
+  if (proposals.some((proposal) => proposal.status === "approved")) return "Check whether this opportunity is the one moving toward delivery handoff.";
   if (project.stage === "closed") return "Confirm outcome and preserve account context.";
   return "Keep project, company, and proposal context aligned.";
 }
@@ -104,7 +103,7 @@ function matchesOpportunity(summary: OpportunitySummary, search: string, stageFi
     summary.project.owner_name ?? "",
     summary.project.client?.company_name ?? "",
     summary.proposalSignal,
-    ...summary.relatedProposals.flatMap((proposal) => [proposal.reference, proposal.title, proposal.status]),
+    ...summary.accountProposals.flatMap((proposal) => [proposal.reference, proposal.title, proposal.status]),
   ]
     .join(" ")
     .toLowerCase();
@@ -176,7 +175,7 @@ export function OpportunitiesWorkspace() {
       const companyId = project.client?.deleted_at ? null : (project.client_id ?? project.client?.id ?? null);
       const companyLabel = project.client?.name || project.client?.company_name || "No linked company";
       const ownerLabel = project.owner_name || "Unassigned";
-      const relatedProposals = companyId ? proposalsByClient.get(companyId) ?? [] : [];
+      const accountProposals = companyId ? proposalsByClient.get(companyId) ?? [] : [];
 
       return {
         id: project.id,
@@ -184,9 +183,9 @@ export function OpportunitiesWorkspace() {
         companyId,
         companyLabel,
         ownerLabel,
-        relatedProposals,
-        proposalSignal: getProposalSignal(relatedProposals, Boolean(companyId)),
-        nextAction: getNextAction(project, relatedProposals, Boolean(companyId)),
+        accountProposals,
+        proposalSignal: getProposalSignal(accountProposals, Boolean(companyId)),
+        nextAction: getNextAction(project, accountProposals, Boolean(companyId)),
       } satisfies OpportunitySummary;
     });
   }, [projects, proposals]);
@@ -202,7 +201,7 @@ export function OpportunitiesWorkspace() {
     ?? null;
 
   const proposalStageCount = opportunities.filter((summary) => summary.project.stage === "proposal" || summary.project.stage === "negotiation").length;
-  const activeProposalCount = opportunities.filter((summary) => summary.relatedProposals.some((proposal) => proposal.status === "draft" || proposal.status === "sent")).length;
+  const activeProposalCount = opportunities.filter((summary) => summary.accountProposals.some((proposal) => proposal.status === "draft" || proposal.status === "sent")).length;
   const linkedCompanyCount = opportunities.filter((summary) => summary.companyId).length;
 
   useEffect(() => {
@@ -262,7 +261,7 @@ export function OpportunitiesWorkspace() {
             <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Active proposal signal</p>
               <p className="mt-2 text-2xl font-semibold text-slate-950">{activeProposalCount}</p>
-              <p className="mt-1 text-sm text-slate-500">Projects with draft or sent proposals ready for follow-up.</p>
+                <p className="mt-1 text-sm text-slate-500">Opportunities whose accounts already carry live proposal context.</p>
             </div>
           </div>
 
@@ -325,7 +324,7 @@ export function OpportunitiesWorkspace() {
               <table className="min-w-[1040px] w-full text-sm">
                 <thead className="bg-slate-50/80 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                   <tr>
-                    {["Opportunity", "Company", "Stage", "Proposal signal", "Owner", "Next action"].map((column) => (
+                    {["Opportunity", "Company", "Stage", "Account proposal context", "Owner", "Next action"].map((column) => (
                       <th key={column} className="px-4 py-3 first:px-5">
                         {column}
                       </th>
@@ -431,23 +430,29 @@ export function OpportunitiesWorkspace() {
                       <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Proposal relationship</p>
                       <p className="mt-2 text-sm font-semibold text-slate-900">{selectedOpportunity.proposalSignal}</p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {selectedOpportunity.relatedProposals.length > 0
-                          ? "Open the live proposal queue from the same company context."
-                          : "No proposal linked through the company context yet."}
+                        {selectedOpportunity.accountProposals.length > 0
+                          ? "These proposals belong to the same account and may or may not map to this exact project."
+                          : "No proposal linked through the same company context yet."}
                       </p>
                     </div>
-                    <Link
-                      href={buildProposalCreateHref(selectedOpportunity)}
-                      className="inline-flex rounded-full bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
-                    >
-                      Create proposal
-                    </Link>
+                    {selectedOpportunity.companyId ? (
+                      <Link
+                        href={buildProposalCreateHref(selectedOpportunity)}
+                        className="inline-flex rounded-full bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+                      >
+                        Create proposal
+                      </Link>
+                    ) : (
+                      <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                        Link company first
+                      </span>
+                    )}
                   </div>
                   <div className="mt-4 space-y-3">
-                    {selectedOpportunity.relatedProposals.length === 0 ? (
-                      <p className="text-sm text-slate-500">No related proposals yet.</p>
+                    {selectedOpportunity.accountProposals.length === 0 ? (
+                      <p className="text-sm text-slate-500">No account-level proposals yet.</p>
                     ) : (
-                      selectedOpportunity.relatedProposals.slice(0, 3).map((proposal) => (
+                      selectedOpportunity.accountProposals.slice(0, 3).map((proposal) => (
                         <Link
                           key={proposal.id}
                           href={`/proposals?proposalId=${proposal.id}`}
