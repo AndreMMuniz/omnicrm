@@ -501,7 +501,11 @@ def serialize_project(project: Project) -> dict:
                 "country": project.client.country,
                 "client_type": project.client.client_type,
                 "currency": project.client.currency,
+                "website": project.client.website,
+                "owner_user_id": project.client.owner_user_id,
+                "owner_name": project.client.owner.full_name if project.client.owner else None,
                 "created_at": project.client.created_at,
+                "updated_at": project.client.updated_at,
                 "deleted_at": project.client.deleted_at,
             }
             if project.client

@@ -7,6 +7,7 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models.models import (
     ChannelType,
+    Client,
     Contact,
     Conversation,
     ConversationStatus,
@@ -159,6 +160,41 @@ def test_list_projects_supports_stage_and_channel_filters(db):
     assert channel_response.status_code == 200
     assert len(channel_response.json()["data"]) == 1
     assert channel_response.json()["data"][0]["title"] == "Closed email project"
+
+
+def test_list_projects_includes_client_payload_without_validation_error(db):
+    user = _seed_user_and_stages(db)
+    linked_client = Client(
+        name="Acme Holding",
+        company_name="Acme Holding SA",
+        created_by_user_id=user.id,
+        owner_user_id=user.id,
+    )
+    db.add(linked_client)
+    db.flush()
+
+    db.add(
+        Project(
+            title="Client-linked project",
+            description="Gamma",
+            stage="lead",
+            priority=ProjectPriority.MEDIUM,
+            status=ProjectStatus.OPEN,
+            source_type=ProjectSourceType.MANUAL,
+            created_by_user_id=user.id,
+            client_id=linked_client.id,
+        )
+    )
+    db.commit()
+
+    client = _make_client(db, user)
+
+    response = client.get("/api/v1/admin/projects")
+    assert response.status_code == 200
+
+    payload = response.json()["data"][0]
+    assert payload["client"]["id"] == str(linked_client.id)
+    assert payload["client"]["updated_at"] is not None
 
 
 def test_update_move_stage_and_delete_project(db):
