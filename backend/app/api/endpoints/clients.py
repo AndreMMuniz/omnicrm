@@ -17,9 +17,14 @@ from app.schemas.client import (
     ClientListResponse,
     ClientResponse,
     ClientUpdate,
+    PeopleDetailResponse,
+    PeopleLinkedCompanyResponse,
+    PeopleListResponse,
+    PersonConversationSummaryResponse,
 )
 from app.schemas.common import create_paginated_response, create_response
 from app.services.customer_timeline_service import build_client_timeline
+from app.models.models import Project, Proposal
 
 router = APIRouter()
 
@@ -43,6 +48,18 @@ def _ensure_client_owner_exists(owner_user_id: Optional[UUID], db: Session) -> N
     owner = db.query(User).filter(User.id == owner_user_id, User.is_active.is_(True)).first()
     if not owner:
         raise HTTPException(status_code=404, detail="Owner user not found")
+
+
+def _get_contact_or_404(contact_id: UUID, db: Session) -> Contact:
+    contact = (
+        db.query(Contact)
+        .options(joinedload(Contact.client))
+        .filter(Contact.id == contact_id)
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contato não encontrado")
+    return contact
 
 
 def _serialize_client_list_row(client: Client) -> ClientListResponse:
@@ -82,6 +99,30 @@ def _serialize_client(client: Client) -> ClientResponse:
         created_at=client.created_at,
         updated_at=client.updated_at,
         deleted_at=client.deleted_at,
+    )
+
+
+def _serialize_people_row(
+    contact: Contact,
+    *,
+    client_name: Optional[str],
+    client_company_name: Optional[str],
+    last_conversation_at,
+    conversation_count: int,
+) -> PeopleListResponse:
+    return PeopleListResponse(
+        id=contact.id,
+        name=contact.name,
+        email=contact.email,
+        phone=contact.phone,
+        avatar=contact.avatar,
+        channel_identifier=contact.channel_identifier,
+        client_id=contact.client_id,
+        client_name=client_name,
+        client_company_name=client_company_name,
+        created_at=contact.created_at,
+        last_conversation_at=last_conversation_at,
+        conversation_count=int(conversation_count or 0),
     )
 
 
@@ -132,6 +173,137 @@ async def list_clients(
         total=total,
         page=(skip // limit) + 1,
         page_size=limit,
+    )
+
+
+@router.get("/contacts/people")
+@limiter.limit("60/minute")
+async def list_people(
+    request: Request,
+    skip: int = 0,
+    limit: int = 50,
+    search: Optional[str] = Query(default=None),
+    linked: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    last_conversation_at = func.max(Conversation.updated_at)
+    conversation_count = func.count(Conversation.id)
+    active_client_join = (Contact.client_id == Client.id) & Client.deleted_at.is_(None)
+    query = (
+        db.query(
+            Contact,
+            Client.name.label("client_name"),
+            Client.company_name.label("client_company_name"),
+            last_conversation_at.label("last_conversation_at"),
+            conversation_count.label("conversation_count"),
+        )
+        .outerjoin(Client, active_client_join)
+        .outerjoin(Conversation, Conversation.contact_id == Contact.id)
+    )
+
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(
+            or_(
+                Contact.name.ilike(pattern),
+                Contact.email.ilike(pattern),
+                Contact.phone.ilike(pattern),
+                Contact.channel_identifier.ilike(pattern),
+                Client.name.ilike(pattern),
+                Client.company_name.ilike(pattern),
+            )
+        )
+
+    if linked == "linked":
+        query = query.filter(Client.id.is_not(None))
+    elif linked == "unlinked":
+        query = query.filter(Client.id.is_(None))
+
+    query = query.group_by(Contact.id, Client.id)
+    total = query.count()
+    rows = (
+        query.order_by(last_conversation_at.desc().nullslast(), Contact.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+    return create_paginated_response(
+        data=[
+            _serialize_people_row(
+                contact,
+                client_name=client_name,
+                client_company_name=client_company_name,
+                last_conversation_at=row_last_conversation_at,
+                conversation_count=row_conversation_count,
+            )
+            for contact, client_name, client_company_name, row_last_conversation_at, row_conversation_count in rows
+        ],
+        total=total,
+        page=(skip // limit) + 1,
+        page_size=limit,
+    )
+
+
+@router.get("/contacts/{contact_id}/people-context")
+@limiter.limit("60/minute")
+async def get_people_context(
+    request: Request,
+    contact_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    contact = _get_contact_or_404(contact_id, db)
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.contact_id == contact_id)
+        .order_by(Conversation.updated_at.desc())
+        .limit(8)
+        .all()
+    )
+    conversation_count = db.query(func.count(Conversation.id)).filter(Conversation.contact_id == contact_id).scalar() or 0
+    last_conversation_at = conversations[0].updated_at if conversations else None
+
+    linked_company = None
+    projects_count = 0
+    proposals_count = 0
+    if contact.client and contact.client.deleted_at is None:
+        linked_company = PeopleLinkedCompanyResponse(
+            id=contact.client.id,
+            name=contact.client.name,
+            company_name=contact.client.company_name,
+            country=contact.client.country,
+        )
+        projects_count = db.query(func.count(Project.id)).filter(Project.client_id == contact.client.id).scalar() or 0
+        proposals_count = db.query(func.count(Proposal.id)).filter(Proposal.client_id == contact.client.id).scalar() or 0
+
+    return create_response(
+        PeopleDetailResponse(
+            id=contact.id,
+            name=contact.name,
+            email=contact.email,
+            phone=contact.phone,
+            avatar=contact.avatar,
+            channel_identifier=contact.channel_identifier,
+            created_at=contact.created_at,
+            conversation_count=int(conversation_count),
+            last_conversation_at=last_conversation_at,
+            linked_company=linked_company,
+            related_conversations=[
+                PersonConversationSummaryResponse(
+                    id=conversation.id,
+                    channel=conversation.channel.value if hasattr(conversation.channel, "value") else conversation.channel,
+                    status=conversation.status.value if hasattr(conversation.status, "value") else conversation.status,
+                    last_message=conversation.last_message,
+                    last_message_date=conversation.last_message_date,
+                    updated_at=conversation.updated_at,
+                )
+                for conversation in conversations
+            ],
+            projects_count=int(projects_count),
+            proposals_count=int(proposals_count),
+        )
     )
 
 

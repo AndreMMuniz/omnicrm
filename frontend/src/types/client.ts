@@ -45,6 +45,53 @@ export interface ClientContactDto {
   created_at: string;
 }
 
+export interface PeopleListDto {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  avatar?: string | null;
+  channel_identifier?: string | null;
+  client_id?: string | null;
+  client_name?: string | null;
+  client_company_name?: string | null;
+  created_at: string;
+  last_conversation_at?: string | null;
+  conversation_count: number;
+}
+
+export interface PersonLinkedCompanyDto {
+  id: string;
+  name: string;
+  company_name?: string | null;
+  country: string;
+}
+
+export interface PersonConversationSummaryDto {
+  id: string;
+  channel: string;
+  status: string;
+  last_message?: string | null;
+  last_message_date?: string | null;
+  updated_at: string;
+}
+
+export interface PeopleDetailDto {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  avatar?: string | null;
+  channel_identifier?: string | null;
+  created_at: string;
+  conversation_count: number;
+  last_conversation_at?: string | null;
+  linked_company?: PersonLinkedCompanyDto | null;
+  related_conversations: PersonConversationSummaryDto[];
+  projects_count: number;
+  proposals_count: number;
+}
+
 export interface ClientCreateRequest {
   name: string;
   country?: string;

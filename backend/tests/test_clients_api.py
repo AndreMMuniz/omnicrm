@@ -121,6 +121,119 @@ def test_list_clients_filters_by_country(db):
     assert [row["id"] for row in response.json()["data"]] == [str(br_company.id)]
 
 
+def test_list_people_returns_contact_identity_with_linked_company(db):
+    current_user = _seed_user(db, "current@example.com", "Current User")
+    company = Client(
+        name="Acme Brasil",
+        company_name="Acme",
+        client_type="company",
+        country="BR",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(company)
+    db.flush()
+
+    from app.models.models import Contact
+
+    contact = Contact(
+        name="Marina Costa",
+        email="marina@example.com",
+        channel_identifier="@marina",
+        client_id=company.id,
+    )
+    db.add(contact)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get("/api/v1/admin/contacts/people")
+
+    assert response.status_code == 200
+    payload = response.json()["data"][0]
+    assert payload["name"] == "Marina Costa"
+    assert payload["client_id"] == str(company.id)
+    assert payload["client_name"] == "Acme Brasil"
+
+
+def test_list_people_treats_soft_deleted_company_as_unlinked(db):
+    current_user = _seed_user(db, "current@example.com", "Current User")
+    company = Client(
+        name="Archived Co",
+        company_name="Archived",
+        client_type="company",
+        country="BR",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(company)
+    db.flush()
+
+    from app.models.models import Contact
+    from datetime import datetime, timezone
+
+    company.deleted_at = datetime.now(timezone.utc)
+    contact = Contact(
+        name="Marina Costa",
+        email="marina@example.com",
+        channel_identifier="@marina",
+        client_id=company.id,
+    )
+    db.add(contact)
+    db.commit()
+
+    client = _make_client(db, current_user)
+
+    response = client.get("/api/v1/admin/contacts/people", params={"linked": "unlinked"})
+    assert response.status_code == 200
+    payload = response.json()["data"][0]
+    assert payload["id"] == str(contact.id)
+    assert payload["client_id"] is None
+    assert payload["client_name"] is None
+
+
+def test_get_people_context_returns_linked_company_and_related_counts(db):
+    current_user = _seed_user(db, "current@example.com", "Current User")
+    company = Client(
+        name="Acme Brasil",
+        company_name="Acme",
+        client_type="company",
+        country="BR",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(company)
+    db.flush()
+
+    from app.models.models import Contact, Conversation
+
+    contact = Contact(
+        name="Marina Costa",
+        email="marina@example.com",
+        channel_identifier="@marina",
+        client_id=company.id,
+    )
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        channel="WHATSAPP",
+        status="OPEN",
+        last_message="Need proposal details",
+    )
+    db.add(conversation)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/admin/contacts/{contact.id}/people-context")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["linked_company"]["id"] == str(company.id)
+    assert payload["conversation_count"] == 1
+    assert payload["related_conversations"][0]["id"] == str(conversation.id)
+
+
 def test_get_client_returns_owner_and_creator_metadata(db):
     current_user = _seed_user(db, "current@example.com", "Current User")
     owner = _seed_user(db, "owner@example.com", "Owner User")

@@ -95,3 +95,58 @@ class ClientContactListResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PeopleListResponse(BaseModel):
+    id: UUID
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    avatar: Optional[str] = None
+    channel_identifier: Optional[str] = None
+    client_id: Optional[UUID] = None
+    client_name: Optional[str] = None
+    client_company_name: Optional[str] = None
+    created_at: datetime
+    last_conversation_at: Optional[datetime] = None
+    conversation_count: int
+
+    model_config = {"from_attributes": True}
+
+
+class PeopleLinkedCompanyResponse(BaseModel):
+    id: UUID
+    name: str
+    company_name: Optional[str] = None
+    country: str
+
+    model_config = {"from_attributes": True}
+
+
+class PersonConversationSummaryResponse(BaseModel):
+    id: UUID
+    channel: str
+    status: str
+    last_message: Optional[str] = None
+    last_message_date: Optional[datetime] = None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PeopleDetailResponse(BaseModel):
+    id: UUID
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    avatar: Optional[str] = None
+    channel_identifier: Optional[str] = None
+    created_at: datetime
+    conversation_count: int
+    last_conversation_at: Optional[datetime] = None
+    linked_company: Optional[PeopleLinkedCompanyResponse] = None
+    related_conversations: list[PersonConversationSummaryResponse]
+    projects_count: int = 0
+    proposals_count: int = 0
+
+    model_config = {"from_attributes": True}

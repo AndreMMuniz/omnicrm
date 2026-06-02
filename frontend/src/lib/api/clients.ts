@@ -1,6 +1,14 @@
 import { apiGet, apiGetList, apiMutate } from "@/lib/apiClient";
 import type { CustomerTimeline } from "@/types/chat";
-import type { ClientContactDto, ClientCreateRequest, ClientDto, ClientListDto, ClientUpdateRequest } from "@/types/client";
+import type {
+  ClientContactDto,
+  ClientCreateRequest,
+  ClientDto,
+  ClientListDto,
+  ClientUpdateRequest,
+  PeopleDetailDto,
+  PeopleListDto,
+} from "@/types/client";
 
 export async function listClients(params?: Record<string, string | number | undefined>) {
   const query = new URLSearchParams();
@@ -17,6 +25,19 @@ export async function getClient(clientId: string): Promise<ClientDto> {
 
 export async function listClientContacts(clientId: string): Promise<ClientContactDto[]> {
   return apiGet<ClientContactDto[]>(`/admin/clients/${clientId}/contacts`);
+}
+
+export async function listPeople(params?: Record<string, string | number | undefined>) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiGetList<PeopleListDto>(`/admin/contacts/people${suffix}`);
+}
+
+export async function getPeopleContext(contactId: string): Promise<PeopleDetailDto> {
+  return apiGet<PeopleDetailDto>(`/admin/contacts/${contactId}/people-context`);
 }
 
 export async function getClientTimeline(
