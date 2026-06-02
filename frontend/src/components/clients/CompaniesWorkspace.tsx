@@ -5,9 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/hooks/useAuth";
 import { clientsApi, usersApi } from "@/lib/api";
-import { buildCompaniesQuery, getCompaniesQuickFilter, isCompanyRowMatch } from "@/lib/companiesWorkspace";
+import { buildCompaniesQuery, getCompaniesQuickFilter, getCompaniesSort, isCompanyRowMatch, sortCompanyRows } from "@/lib/companiesWorkspace";
 import type { User } from "@/types/auth";
-import type { CompanyDraft, CompaniesQuickFilter } from "@/types/companyWorkspace";
+import type { CompanyDraft, CompaniesQuickFilter, CompaniesSort } from "@/types/companyWorkspace";
 import type { ClientCreateRequest, ClientDto, ClientListDto, ClientUpdateRequest } from "@/types/client";
 
 const TABLE_COLUMNS = [
@@ -19,6 +19,7 @@ const TABLE_COLUMNS = [
   "Last activity",
   "Country",
   "Status",
+  "Created at",
 ] as const;
 
 function formatDateLabel(iso: string | null | undefined) {
@@ -165,6 +166,8 @@ export function CompaniesWorkspace() {
   const selectedCompanyId = searchParams.get("companyId");
   const search = searchParams.get("search") ?? "";
   const quickFilter = getCompaniesQuickFilter(searchParams.get("filter"));
+  const country = searchParams.get("country") ?? "";
+  const sort = getCompaniesSort(searchParams.get("sort"));
 
   const [companies, setCompanies] = useState<ClientListDto[]>([]);
   const [owners, setOwners] = useState<User[]>([]);
@@ -179,19 +182,35 @@ export function CompaniesWorkspace() {
   const [banner, setBanner] = useState<string | null>(null);
 
   const currentUserId = user?.id ?? null;
-  const visibleCompanies = companies.filter((row) =>
-    isCompanyRowMatch(row, {
-      search,
-      quickFilter,
-      currentUserId,
-    }),
+  const visibleCompanies = sortCompanyRows(
+    companies.filter((row) =>
+      isCompanyRowMatch(row, {
+        search,
+        quickFilter,
+        currentUserId,
+        country,
+      }),
+    ),
+    sort,
   );
+  const visibleCompanyIds = visibleCompanies.map((company) => company.id).join("|");
+  const countries = Array.from(new Set(companies.map((company) => company.country).filter(Boolean))).sort();
+  const unassignedCount = companies.filter((company) => !company.owner_user_id).length;
+  const myAccountsCount = companies.filter((company) => company.owner_user_id === currentUserId).length;
 
-  function updateUrl(next: { companyId?: string | null; search?: string; filter?: CompaniesQuickFilter }) {
+  function updateUrl(next: {
+    companyId?: string | null;
+    search?: string;
+    filter?: CompaniesQuickFilter;
+    country?: string;
+    sort?: CompaniesSort;
+  }) {
     const params = buildCompaniesQuery({
       companyId: next.companyId === undefined ? selectedCompanyId : next.companyId,
       search: next.search === undefined ? search : next.search,
       quickFilter: next.filter === undefined ? quickFilter : next.filter,
+      country: next.country === undefined ? country : next.country,
+      sort: next.sort === undefined ? sort : next.sort,
     });
 
     startTransition(() => {
@@ -246,7 +265,7 @@ export function CompaniesWorkspace() {
   }, [user?.id]);
 
   useEffect(() => {
-    if (selectedCompanyId) {
+    if (selectedCompanyId && visibleCompanies.some((company) => company.id === selectedCompanyId)) {
       void loadCompanyDetail(selectedCompanyId);
       return;
     }
@@ -257,7 +276,7 @@ export function CompaniesWorkspace() {
     if (!isCreateMode && visibleCompanies.length > 0) {
       updateUrl({ companyId: visibleCompanies[0].id });
     }
-  }, [selectedCompanyId, visibleCompanies.length]);
+  }, [selectedCompanyId, visibleCompanyIds, isCreateMode]);
 
   async function saveSelectedCompany() {
     if (!selectedCompany || !draft) return;
@@ -329,6 +348,7 @@ export function CompaniesWorkspace() {
                 {[
                   { value: "all" as const, label: "All companies" },
                   { value: "my-accounts" as const, label: "My accounts" },
+                  { value: "unassigned" as const, label: "Unassigned" },
                 ].map((option) => {
                   const active = quickFilter === option.value;
                   return (
@@ -361,7 +381,7 @@ export function CompaniesWorkspace() {
             </div>
           </div>
 
-          <div className="mt-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="mt-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <label className="flex min-h-12 flex-1 items-center rounded-2xl border border-slate-200 bg-slate-50 px-4">
               <span className="mr-3 text-slate-400">Search</span>
               <input
@@ -372,10 +392,40 @@ export function CompaniesWorkspace() {
               />
             </label>
 
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-2">Saved view: Account health</span>
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-2">Sort: Last activity</span>
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-2">Density: Comfortable</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                <span>Country</span>
+                <select
+                  value={country}
+                  onChange={(event) => updateUrl({ country: event.target.value, companyId: null })}
+                  className="bg-transparent text-xs font-medium text-slate-700 outline-none"
+                >
+                  <option value="">All</option>
+                  {countries.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                <span>Sort</span>
+                <select
+                  value={sort}
+                  onChange={(event) => updateUrl({ sort: event.target.value as CompaniesSort })}
+                  className="bg-transparent text-xs font-medium text-slate-700 outline-none"
+                >
+                  <option value="last-activity">Last activity</option>
+                  <option value="created-at">Created at</option>
+                  <option value="company-asc">Company A-Z</option>
+                </select>
+              </label>
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                My accounts: {myAccountsCount}
+              </span>
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                Unassigned: {unassignedCount}
+              </span>
             </div>
           </div>
 
@@ -392,7 +442,7 @@ export function CompaniesWorkspace() {
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
               <div>
                 <p className="text-sm font-semibold text-slate-900">Account table</p>
-                <p className="mt-1 text-xs text-slate-500">Scan companies, compare ownership, and open context without leaving the grid.</p>
+                <p className="mt-1 text-xs text-slate-500">Scan companies, compare ownership, and move across records without losing the collection view.</p>
               </div>
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
                 {loadingList ? "Loading..." : `${visibleCompanies.length} rows`}
@@ -451,6 +501,7 @@ export function CompaniesWorkspace() {
                               Active account
                             </span>
                           </td>
+                          <td className="px-4 py-4 text-slate-600">{formatDateLabel(company.created_at)}</td>
                         </tr>
                       );
                     })
@@ -467,6 +518,11 @@ export function CompaniesWorkspace() {
                   {isCreateMode ? "Create record" : "Context panel"}
                 </p>
                 <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{panelTitle}</h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  {isCreateMode
+                    ? "Create a new account without leaving the table-oriented workspace."
+                    : "Context stays secondary here so the table remains the operational center of gravity."}
+                </p>
               </div>
               {loadingPanel ? <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">Loading</span> : null}
             </div>
