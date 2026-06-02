@@ -27,3 +27,27 @@ def test_build_allowed_origins_falls_back_to_localhost(monkeypatch):
 
     origins = main_module._build_allowed_origins()
     assert origins == ["http://localhost:3000", "http://localhost:3001"]
+
+
+def test_resolve_telegram_bot_token_prefers_database_value(monkeypatch):
+    import app.core.database as database_module
+    import main as main_module
+
+    class _FakeSettings:
+        telegram_bot_token = "db-token"
+
+    class _FakeQuery:
+        def first(self):
+            return _FakeSettings()
+
+    class _FakeSession:
+        def query(self, _model):
+            return _FakeQuery()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(database_module, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(main_module.settings, "TELEGRAM_BOT_TOKEN", "env-token")
+
+    assert main_module._resolve_telegram_bot_token() == "db-token"

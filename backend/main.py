@@ -13,6 +13,28 @@ from app.core.limiter import limiter
 from app.services.telegram_service import telegram_service
 
 
+def _resolve_telegram_bot_token() -> str:
+    """Prefer the encrypted DB-backed token, then fall back to the environment."""
+    env_token = settings.TELEGRAM_BOT_TOKEN
+
+    try:
+        from app.core.database import SessionLocal
+        from app.models.models import GeneralSettings
+
+        if not SessionLocal:
+            return env_token
+
+        db = SessionLocal()
+        try:
+            cfg = db.query(GeneralSettings).first()
+            return (cfg.telegram_bot_token if cfg and cfg.telegram_bot_token else env_token) or ""
+        finally:
+            db.close()
+    except Exception as exc:
+        print(f"Telegram token bootstrap fallback to env: {exc}")
+        return env_token
+
+
 def _validate_encryption_key() -> None:
     """Fail fast if DATABASE_ENCRYPTION_KEY is missing or malformed in production."""
     key_hex = os.getenv("DATABASE_ENCRYPTION_KEY", "")
@@ -137,8 +159,12 @@ async def _task_automation_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: register Telegram webhook + start Email IMAP polling + agent workers."""
+    telegram_token = _resolve_telegram_bot_token()
+    if telegram_token != telegram_service.bot_token:
+        telegram_service.reload(telegram_token)
+
     base_url = settings.WEBHOOK_BASE_URL.rstrip("/")
-    if base_url and settings.TELEGRAM_BOT_TOKEN:
+    if base_url and telegram_token:
         webhook_url = f"{base_url}/api/v1/telegram/webhook"
         # Fire-and-forget: don't block startup waiting for Telegram API response.
         # A slow/unavailable Telegram API was causing 4+ minute startup delays.
