@@ -10,6 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.models.models import Conversation, Message
 from app.core.websocket import manager  # re-exported to preserve existing patch targets in tests
+from app.services.conversation_event_service import (
+    ConversationBusinessEvent,
+    ConversationBusinessEventType,
+    conversation_event_dispatcher,
+)
 from app.services.message_creation_service import MessageCreationService
 from app.services.message_delivery_service import DeliveryService
 from app.services.message_broadcast_service import BroadcastService
@@ -92,6 +97,11 @@ class MessageService:
     ) -> Message:
         from app.models.models import DeliveryStatus
 
+        if idempotency_key:
+            existing = self._creation.find_by_idempotency_key(idempotency_key)
+            if existing:
+                return existing
+
         message = self._creation.create_message(
             conversation=conversation, content=content, inbound=False,
             owner_id=owner_id, message_type=message_type, image=image,
@@ -101,6 +111,15 @@ class MessageService:
         if conversation.first_response_at is None:
             conversation.first_response_at = datetime.now(timezone.utc)
         self.db.commit()
+
+        await self._emit_new_message_event(
+            conversation=conversation,
+            message=message,
+            direction="outbound",
+            source="dashboard",
+            actor_user_id=owner_id,
+            idempotency_key=idempotency_key,
+        )
 
         try:
             await self._delivery.dispatch_to_channel(conversation, content, message)
@@ -119,9 +138,21 @@ class MessageService:
         idempotency_key: Optional[str] = None,
         agent_content: Optional[str] = None,
     ) -> Message:
+        if idempotency_key:
+            existing = self._creation.find_by_idempotency_key(idempotency_key)
+            if existing:
+                return existing
+
         message = self._creation.create_message(
             conversation=conversation, content=content, inbound=True,
             message_type=message_type, idempotency_key=idempotency_key,
+        )
+        await self._emit_new_message_event(
+            conversation=conversation,
+            message=message,
+            direction="inbound",
+            source="channel",
+            idempotency_key=idempotency_key,
         )
         await self._broadcast.broadcast_new_message(message)
         await self._enqueue_for_agent(message, conversation, agent_content=agent_content)
@@ -143,8 +174,54 @@ class MessageService:
             update_last_message=False,
         )
         self.db.refresh(message, attribute_names=["owner"])
+        await self._emit_note_created_event(conversation, message, owner_id)
         await self._broadcast.broadcast_new_message(message)
         return message
+
+    async def _emit_new_message_event(
+        self,
+        *,
+        conversation: Conversation,
+        message: Message,
+        direction: str,
+        source: str,
+        actor_user_id: Optional[UUID] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> None:
+        await conversation_event_dispatcher.emit(ConversationBusinessEvent(
+            event_type=ConversationBusinessEventType.NEW_MESSAGE,
+            conversation_id=str(conversation.id),
+            channel=conversation.channel.value if conversation.channel else "web",
+            actor_user_id=str(actor_user_id) if actor_user_id else None,
+            source=source,
+            payload={
+                "message_id": str(message.id),
+                "direction": direction,
+                "message_type": message.message_type.value if message.message_type else "text",
+                "is_internal": bool(message.is_internal),
+                "idempotency_key": idempotency_key,
+            },
+        ))
+
+    async def _emit_note_created_event(
+        self,
+        conversation: Conversation,
+        message: Message,
+        owner_id: UUID,
+    ) -> None:
+        preview = " ".join((message.content or "").strip().split())
+        await conversation_event_dispatcher.emit(ConversationBusinessEvent(
+            event_type=ConversationBusinessEventType.NOTE_CREATED,
+            conversation_id=str(conversation.id),
+            channel=conversation.channel.value if conversation.channel else "web",
+            actor_user_id=str(owner_id),
+            source="dashboard",
+            payload={
+                "message_id": str(message.id),
+                "is_internal": True,
+                "content_preview": preview[:160],
+            },
+        ))
 
     async def _enqueue_for_agent(
         self,

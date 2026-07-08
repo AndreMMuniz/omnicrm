@@ -12,6 +12,11 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.models.models import Conversation, ConversationStatus, ConversationTag
 from app.core.websocket import manager
 from app.schemas.chat import normalize_conversation_tags, serialize_conversation_status
+from app.services.conversation_event_service import (
+    ConversationBusinessEvent,
+    ConversationBusinessEventType,
+    conversation_event_dispatcher,
+)
 
 log = logging.getLogger(__name__)
 
@@ -106,16 +111,30 @@ class ConversationService:
         })
 
     async def update_and_broadcast(
-        self, conversation: Conversation, data: dict
+        self,
+        conversation: Conversation,
+        data: dict,
+        actor_user_id: object | None = None,
+        source: str = "dashboard",
     ) -> Conversation:
         """Update state + broadcast in one call.
 
         If the conversation is being closed, fires a lead detection task
         as fire-and-forget (does not block or affect the response).
         """
+        previous_status = conversation.status
+        previous_needs_follow_up = bool(conversation.needs_follow_up)
         closing = _is_closing(conversation, data)
         updated = self.update_conversation(conversation, data)
         await self.broadcast_update(updated)
+        await self._emit_update_events(
+            updated,
+            data,
+            previous_status=previous_status,
+            previous_needs_follow_up=previous_needs_follow_up,
+            actor_user_id=actor_user_id,
+            source=source,
+        )
 
         if closing:
             channel = updated.channel.value if updated.channel else "web"
@@ -124,6 +143,94 @@ class ConversationService:
             )
 
         return updated
+
+    async def assign_and_broadcast(
+        self,
+        conversation: Conversation,
+        assigned_user: object | None,
+        *,
+        actor_user_id: object | None = None,
+        source: str = "dashboard",
+    ) -> tuple[Conversation, dict]:
+        previous_assigned_user_id = conversation.assigned_user_id
+        previous_assigned_user_name = conversation.assigned_user.full_name if conversation.assigned_user else None
+
+        if assigned_user:
+            conversation.assigned_user_id = assigned_user.id
+            conversation.assigned_user = assigned_user
+        else:
+            conversation.assigned_user_id = None
+            conversation.assigned_user = None
+
+        self.db.commit()
+        if _conversation_has_tags_column(self.db):
+            self.db.refresh(conversation)
+        else:
+            _hydrate_legacy_tags(conversation)
+
+        await self.broadcast_update(conversation)
+
+        details = {
+            "previous_assigned_user_id": str(previous_assigned_user_id) if previous_assigned_user_id else None,
+            "previous_assigned_user_name": previous_assigned_user_name,
+            "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
+            "assigned_user_name": conversation.assigned_user.full_name if conversation.assigned_user else None,
+        }
+
+        if previous_assigned_user_id != conversation.assigned_user_id:
+            await conversation_event_dispatcher.emit(ConversationBusinessEvent(
+                event_type=ConversationBusinessEventType.ASSIGNMENT_CHANGED,
+                conversation_id=str(conversation.id),
+                channel=conversation.channel.value if conversation.channel else "web",
+                actor_user_id=str(actor_user_id) if actor_user_id else None,
+                source=source,
+                payload={
+                    "previous_assigned_user_id": details["previous_assigned_user_id"],
+                    "assigned_user_id": details["assigned_user_id"],
+                },
+            ))
+
+        return conversation, details
+
+    async def _emit_update_events(
+        self,
+        conversation: Conversation,
+        data: dict,
+        *,
+        previous_status: ConversationStatus,
+        previous_needs_follow_up: bool,
+        actor_user_id: object | None,
+        source: str,
+    ) -> None:
+        current_status = serialize_conversation_status(conversation.status)
+        previous_status_value = serialize_conversation_status(previous_status)
+
+        if "status" in data and previous_status_value != current_status:
+            await conversation_event_dispatcher.emit(ConversationBusinessEvent(
+                event_type=ConversationBusinessEventType.STATUS_CHANGED,
+                conversation_id=str(conversation.id),
+                channel=conversation.channel.value if conversation.channel else "web",
+                actor_user_id=str(actor_user_id) if actor_user_id else None,
+                source=source,
+                payload={
+                    "previous_status": previous_status_value,
+                    "status": current_status,
+                },
+            ))
+
+        if "needs_follow_up" in data and not previous_needs_follow_up and conversation.needs_follow_up:
+            await conversation_event_dispatcher.emit(ConversationBusinessEvent(
+                event_type=ConversationBusinessEventType.FOLLOW_UP_MARKED,
+                conversation_id=str(conversation.id),
+                channel=conversation.channel.value if conversation.channel else "web",
+                actor_user_id=str(actor_user_id) if actor_user_id else None,
+                source=source,
+                payload={
+                    "needs_follow_up": True,
+                    "follow_up_at": conversation.follow_up_at.isoformat() if conversation.follow_up_at else None,
+                    "has_note": bool(conversation.follow_up_note),
+                },
+            ))
 
 
 def get_conversation_service(db: Session) -> ConversationService:

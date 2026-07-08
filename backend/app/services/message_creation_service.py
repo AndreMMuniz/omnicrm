@@ -21,6 +21,9 @@ class MessageCreationService:
     def _find_by_idempotency_key(self, key: str) -> Optional[Message]:
         return self.db.query(Message).filter(Message.idempotency_key == key).first()
 
+    def find_by_idempotency_key(self, key: str) -> Optional[Message]:
+        return self._find_by_idempotency_key(key)
+
     def create_message(
         self,
         conversation: Conversation,

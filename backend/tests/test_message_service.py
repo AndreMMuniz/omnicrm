@@ -4,11 +4,60 @@ Unit tests for MessageService — sequencing, idempotency, dispatch routing.
 
 import pytest
 from unittest.mock import AsyncMock, patch
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.services.message_service import MessageService
+from app.services.conversation_event_service import ConversationBusinessEventType
 from app.models.models import (
-    Contact, Conversation, Message, ChannelType
+    Base, Client, Contact, Conversation, Message, ChannelType, Project, ProjectStage, User, UserType
 )
+
+
+TEST_DB_URL = "sqlite://"
+engine = create_engine(
+    TEST_DB_URL,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+@pytest.fixture(scope="function")
+def db():
+    tables = [
+        UserType.__table__,
+        User.__table__,
+        Client.__table__,
+        Contact.__table__,
+        ProjectStage.__table__,
+        Project.__table__,
+        Conversation.__table__,
+        Message.__table__,
+    ]
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        Base.metadata.drop_all(bind=connection, tables=tables)
+        Base.metadata.create_all(bind=connection, tables=tables)
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            Base.metadata.drop_all(bind=connection, tables=tables)
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -148,6 +197,185 @@ class TestSendFromDashboard:
             msg = await MessageService(db).receive_from_channel(conv, "Customer says hi")
 
         assert msg.inbound is True
+
+
+class TestMessageBusinessEvents:
+    @pytest.mark.asyncio
+    async def test_receive_from_channel_emits_inbound_new_message_event(self, db, monkeypatch):
+        conv = make_conversation(db, channel=ChannelType.WHATSAPP)
+        emitted = []
+
+        async def fake_emit(event):
+            emitted.append(event)
+
+        monkeypatch.setattr(
+            "app.services.message_service.conversation_event_dispatcher.emit",
+            fake_emit,
+        )
+
+        with patch(
+            "app.services.message_service.manager.broadcast_to_conversation",
+            new_callable=AsyncMock,
+        ):
+            msg = await MessageService(db).receive_from_channel(
+                conv,
+                "Customer says hi",
+                idempotency_key="channel-msg-1",
+            )
+
+        assert len(emitted) == 1
+        event = emitted[0]
+        assert event.event_type == ConversationBusinessEventType.NEW_MESSAGE
+        payload = event.to_payload()
+        assert payload["conversation_id"] == str(conv.id)
+        assert payload["channel"] == "whatsapp"
+        assert payload["source"] == "channel"
+        assert payload["message_id"] == str(msg.id)
+        assert payload["direction"] == "inbound"
+        assert payload["message_type"] == "text"
+        assert payload["is_internal"] is False
+        assert payload["idempotency_key"] == "channel-msg-1"
+
+    @pytest.mark.asyncio
+    async def test_send_from_dashboard_emits_outbound_new_message_event(self, db, monkeypatch):
+        conv = make_conversation(db, channel=ChannelType.TELEGRAM)
+        emitted = []
+
+        async def fake_emit(event):
+            emitted.append(event)
+
+        monkeypatch.setattr(
+            "app.services.message_service.conversation_event_dispatcher.emit",
+            fake_emit,
+        )
+
+        with patch(
+            "app.services.channel_service.ChannelService.send",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.services.message_service.manager.broadcast_to_conversation",
+            new_callable=AsyncMock,
+        ):
+            msg = await MessageService(db).send_from_dashboard(
+                conv,
+                "Hi there",
+                idempotency_key="dashboard-msg-1",
+            )
+
+        payload = emitted[0].to_payload()
+        assert payload["event_type"] == "new_message"
+        assert payload["source"] == "dashboard"
+        assert payload["actor_user_id"] is None
+        assert payload["message_id"] == str(msg.id)
+        assert payload["direction"] == "outbound"
+        assert payload["idempotency_key"] == "dashboard-msg-1"
+
+    @pytest.mark.asyncio
+    async def test_send_from_dashboard_idempotent_duplicate_does_not_reemit_or_redispatch(self, db, monkeypatch):
+        conv = make_conversation(db, channel=ChannelType.TELEGRAM)
+        emitted = []
+
+        async def fake_emit(event):
+            emitted.append(event)
+
+        monkeypatch.setattr(
+            "app.services.message_service.conversation_event_dispatcher.emit",
+            fake_emit,
+        )
+
+        with patch(
+            "app.services.channel_service.ChannelService.send",
+            new_callable=AsyncMock,
+        ) as mock_dispatch, patch(
+            "app.services.message_service.manager.broadcast_to_conversation",
+            new_callable=AsyncMock,
+        ) as mock_broadcast:
+            first = await MessageService(db).send_from_dashboard(
+                conv,
+                "Hi there",
+                idempotency_key="dashboard-idempotent-1",
+            )
+            duplicate = await MessageService(db).send_from_dashboard(
+                conv,
+                "Duplicate body should not matter",
+                idempotency_key="dashboard-idempotent-1",
+            )
+
+        assert duplicate.id == first.id
+        assert len(emitted) == 1
+        mock_dispatch.assert_called_once()
+        mock_broadcast.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_receive_from_channel_idempotent_duplicate_does_not_reemit_or_rebroadcast(self, db, monkeypatch):
+        conv = make_conversation(db, channel=ChannelType.WHATSAPP)
+        emitted = []
+
+        async def fake_emit(event):
+            emitted.append(event)
+
+        monkeypatch.setattr(
+            "app.services.message_service.conversation_event_dispatcher.emit",
+            fake_emit,
+        )
+
+        with patch(
+            "app.services.message_service.manager.broadcast_to_conversation",
+            new_callable=AsyncMock,
+        ) as mock_broadcast, patch(
+            "app.services.message_service.MessageService._enqueue_for_agent",
+            new_callable=AsyncMock,
+        ) as mock_enqueue:
+            first = await MessageService(db).receive_from_channel(
+                conv,
+                "Customer says hi",
+                idempotency_key="channel-idempotent-1",
+            )
+            duplicate = await MessageService(db).receive_from_channel(
+                conv,
+                "Duplicate inbound should not matter",
+                idempotency_key="channel-idempotent-1",
+            )
+
+        assert duplicate.id == first.id
+        assert len(emitted) == 1
+        mock_broadcast.assert_called_once()
+        mock_enqueue.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_internal_note_emits_note_created_event_with_preview(self, db, monkeypatch):
+        conv = make_conversation(db, channel=ChannelType.EMAIL)
+        role = UserType(name="Agent")
+        user = User(auth_id="auth-agent", email="agent@example.com", full_name="Agent User", user_type=role)
+        db.add_all([role, user])
+        db.commit()
+        emitted = []
+
+        async def fake_emit(event):
+            emitted.append(event)
+
+        monkeypatch.setattr(
+            "app.services.message_service.conversation_event_dispatcher.emit",
+            fake_emit,
+        )
+
+        with patch(
+            "app.services.message_service.manager.broadcast_to_conversation",
+            new_callable=AsyncMock,
+        ):
+            note = await MessageService(db).create_internal_note(
+                conv,
+                "Need manager follow-up before replying.",
+                owner_id=user.id,
+            )
+
+        payload = emitted[0].to_payload()
+        assert payload["event_type"] == "note_created"
+        assert payload["source"] == "dashboard"
+        assert payload["actor_user_id"] == str(user.id)
+        assert payload["message_id"] == str(note.id)
+        assert payload["is_internal"] is True
+        assert payload["content_preview"] == "Need manager follow-up before replying."
 
 
 # ── retry_message ─────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ from app.api.api import api_router
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.websocket import manager
+from app.services.conversation_event_service import ConversationBusinessEventType
 from app.models.models import (
     AuditLog,
     Base,
@@ -221,6 +222,92 @@ def test_assign_conversation_updates_owner_audits_and_broadcasts(db, monkeypatch
     assert data["assigned_user"]["full_name"] == "Owner User"
 
 
+def test_assign_conversation_emits_assignment_changed_business_event(db, monkeypatch):
+    current_user = _seed_user(db, "manager@example.com", "Manager User")
+    assigned_user = _seed_user(db, "owner@example.com", "Owner User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    emitted = []
+
+    async def fake_emit(event):
+        emitted.append(event)
+
+    async def fake_broadcast_global(event_type, data):
+        return None
+
+    monkeypatch.setattr("app.services.conversation_service.conversation_event_dispatcher.emit", fake_emit)
+    monkeypatch.setattr(manager, "broadcast_global", fake_broadcast_global)
+
+    client = _make_client(db, current_user)
+    response = client.patch(
+        f"/api/v1/chat/conversations/{conversation.id}/assign",
+        json={"assigned_user_id": str(assigned_user.id)},
+    )
+
+    assert response.status_code == 200
+    assert len(emitted) == 1
+    event = emitted[0]
+    assert event.event_type == ConversationBusinessEventType.ASSIGNMENT_CHANGED
+    payload = event.to_payload()
+    assert payload["conversation_id"] == str(conversation.id)
+    assert payload["channel"] == "whatsapp"
+    assert payload["source"] == "dashboard"
+    assert payload["actor_user_id"] == str(current_user.id)
+    assert payload["previous_assigned_user_id"] is None
+    assert payload["assigned_user_id"] == str(assigned_user.id)
+
+
+def test_assignment_business_event_failure_does_not_break_route(db, monkeypatch):
+    current_user = _seed_user(db, "manager@example.com", "Manager User")
+    assigned_user = _seed_user(db, "owner@example.com", "Owner User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        channel=ChannelType.EMAIL,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    from app.services.conversation_service import conversation_event_dispatcher
+
+    async def failing_consumer(event):
+        raise RuntimeError("consumer exploded")
+
+    async def fake_broadcast_global(event_type, data):
+        return None
+
+    conversation_event_dispatcher.clear()
+    conversation_event_dispatcher.register(failing_consumer)
+    monkeypatch.setattr(manager, "broadcast_global", fake_broadcast_global)
+
+    try:
+        client = _make_client(db, current_user)
+        response = client.patch(
+            f"/api/v1/chat/conversations/{conversation.id}/assign",
+            json={"assigned_user_id": str(assigned_user.id)},
+        )
+    finally:
+        conversation_event_dispatcher.clear()
+
+    assert response.status_code == 200
+    db.refresh(conversation)
+    assert conversation.assigned_user_id == assigned_user.id
+
+
 def test_assign_conversation_supports_unassign(db, monkeypatch):
     current_user = _seed_user(db, "manager@example.com", "Manager User")
     assigned_user = _seed_user(db, "owner@example.com", "Owner User")
@@ -305,6 +392,46 @@ def test_update_conversation_accepts_resolved_and_broadcasts_public_status(db, m
     event_type, data = events[0]
     assert event_type == "conversation_updated"
     assert data["status"] == "resolved"
+
+
+def test_update_conversation_emits_status_changed_business_event(db, monkeypatch):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WEB,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    emitted = []
+
+    async def fake_emit(event):
+        emitted.append(event)
+
+    async def fake_broadcast_global(event_type, data):
+        return None
+
+    monkeypatch.setattr("app.services.conversation_service.conversation_event_dispatcher.emit", fake_emit)
+    monkeypatch.setattr(manager, "broadcast_global", fake_broadcast_global)
+
+    client = _make_client(db, current_user)
+    response = client.patch(
+        f"/api/v1/chat/conversations/{conversation.id}",
+        json={"status": "resolved"},
+    )
+
+    assert response.status_code == 200
+    payload = emitted[0].to_payload()
+    assert payload["event_type"] == "status_changed"
+    assert payload["previous_status"] == "open"
+    assert payload["status"] == "resolved"
+    assert payload["actor_user_id"] == str(current_user.id)
 
 
 def test_update_conversation_blocks_non_manager_from_changing_other_users_conversation(db):
@@ -412,6 +539,88 @@ def test_update_conversation_marks_follow_up_and_broadcasts_state(db, monkeypatc
     assert data["needs_follow_up"] is True
     assert data["follow_up_note"] == "Confirm proposal acceptance tomorrow."
     assert data["follow_up_at"].startswith("2026-07-09T12:30:00")
+
+
+def test_update_conversation_emits_follow_up_marked_business_event(db, monkeypatch):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    emitted = []
+
+    async def fake_emit(event):
+        emitted.append(event)
+
+    async def fake_broadcast_global(event_type, data):
+        return None
+
+    monkeypatch.setattr("app.services.conversation_service.conversation_event_dispatcher.emit", fake_emit)
+    monkeypatch.setattr(manager, "broadcast_global", fake_broadcast_global)
+
+    client = _make_client(db, current_user)
+    response = client.patch(
+        f"/api/v1/chat/conversations/{conversation.id}",
+        json={
+            "needs_follow_up": True,
+            "follow_up_note": "Confirm proposal acceptance tomorrow.",
+            "follow_up_at": "2026-07-09T12:30:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = emitted[0].to_payload()
+    assert payload["event_type"] == "follow_up_marked"
+    assert payload["needs_follow_up"] is True
+    assert payload["has_note"] is True
+    assert payload["follow_up_at"].startswith("2026-07-09T12:30:00")
+
+
+def test_follow_up_business_event_emits_only_on_transition_to_active(db, monkeypatch):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+        needs_follow_up=True,
+        follow_up_note="Existing cue.",
+    )
+    db.add(conversation)
+    db.commit()
+
+    emitted = []
+
+    async def fake_emit(event):
+        emitted.append(event)
+
+    async def fake_broadcast_global(event_type, data):
+        return None
+
+    monkeypatch.setattr("app.services.conversation_service.conversation_event_dispatcher.emit", fake_emit)
+    monkeypatch.setattr(manager, "broadcast_global", fake_broadcast_global)
+
+    client = _make_client(db, current_user)
+    response = client.patch(
+        f"/api/v1/chat/conversations/{conversation.id}",
+        json={"follow_up_note": "Updated cue."},
+    )
+
+    assert response.status_code == 200
+    assert emitted == []
 
 
 def test_update_conversation_clears_follow_up_state(db, monkeypatch):
@@ -555,6 +764,63 @@ def test_follow_up_update_respects_conversation_ownership_permissions(db):
 
     assert response.status_code == 403
     assert response.json()["detail"]["error"]["code"] == "FORBIDDEN"
+
+
+def test_send_message_uses_authenticated_user_as_owner_and_business_event_actor(db, monkeypatch):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    spoofed_owner = _seed_user(db, "spoof@example.com", "Spoofed User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    emitted = []
+
+    async def fake_emit(event):
+        emitted.append(event)
+
+    async def fake_send(self, conversation, content):
+        return True
+
+    async def fake_notify_new_message(conversation_id, message_data, preview=""):
+        return None
+
+    monkeypatch.setattr("app.services.message_service.conversation_event_dispatcher.emit", fake_emit)
+    monkeypatch.setattr("app.services.channel_service.ChannelService.send", fake_send)
+    monkeypatch.setattr(manager, "notify_new_message", fake_notify_new_message)
+
+    client = _make_client(db, current_user)
+    response = client.post(
+        f"/api/v1/chat/conversations/{conversation.id}/messages",
+        json={
+            "conversation_id": str(conversation.id),
+            "content": "Authenticated reply",
+            "inbound": False,
+            "message_type": "text",
+            "owner_id": str(spoofed_owner.id),
+            "idempotency_key": "api-authenticated-send-1",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["owner_id"] == str(current_user.id)
+
+    message = db.query(Message).filter(Message.conversation_id == conversation.id).one()
+    assert message.owner_id == current_user.id
+
+    event_payload = emitted[0].to_payload()
+    assert event_payload["event_type"] == "new_message"
+    assert event_payload["source"] == "dashboard"
+    assert event_payload["actor_user_id"] == str(current_user.id)
 
 
 def test_create_internal_note_persists_author_without_changing_preview(db, monkeypatch):

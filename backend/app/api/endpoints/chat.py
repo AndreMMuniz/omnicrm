@@ -558,7 +558,9 @@ async def update_conversation(
 
     svc = ConversationService(db)
     conversation = await svc.update_and_broadcast(
-        conversation, update_data.model_dump(exclude_unset=True)
+        conversation,
+        update_data.model_dump(exclude_unset=True),
+        actor_user_id=current_user.id,
     )
     conversation = _hydrate_legacy_tags(db, conversation)
     return create_response(ConversationResponse.model_validate(conversation))
@@ -571,6 +573,7 @@ async def send_message(
     conversation_id: UUID,
     message_data: MessageCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Send a message from the dashboard to a conversation."""
     conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
@@ -582,11 +585,23 @@ async def send_message(
         )
         raise HTTPException(status_code=status, detail=error_response)
 
+    if not _can_operate_conversation(current_user, conversation):
+        error_response, status = create_error_response(
+            code="FORBIDDEN",
+            message="You do not have permission to send messages to this conversation",
+            details={
+                "conversation_id": str(conversation_id),
+                "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
+            },
+            status_code=403,
+        )
+        raise HTTPException(status_code=status, detail=error_response)
+
     svc = MessageService(db)
     new_message = await svc.send_from_dashboard(
         conversation=conversation,
         content=message_data.content,
-        owner_id=message_data.owner_id,
+        owner_id=current_user.id,
         message_type=message_data.message_type.value if hasattr(message_data.message_type, "value") else str(message_data.message_type),
         image=message_data.image,
         file=message_data.file,
@@ -657,7 +672,6 @@ async def assign_conversation(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Assign or unassign a conversation to an agent. Pass {assigned_user_id: uuid|null}."""
-    has_tags_column = _conversation_has_tags_column(db)
     conversation = _conversation_query(db).filter(Conversation.id == conversation_id).first()
     if not conversation:
         error_response, status = create_error_response(
@@ -665,9 +679,8 @@ async def assign_conversation(
         )
         raise HTTPException(status_code=status, detail=error_response)
 
-    previous_assigned_user_id = conversation.assigned_user_id
-    previous_assigned_user_name = conversation.assigned_user.full_name if conversation.assigned_user else None
     new_uid = body.assigned_user_id
+    user = None
 
     if new_uid:
         user = (
@@ -680,16 +693,13 @@ async def assign_conversation(
                 code="USER_NOT_FOUND", message="User not found", status_code=404
             )
             raise HTTPException(status_code=status, detail=error_response)
-        conversation.assigned_user_id = user.id
-        conversation.assigned_user = user
-    else:
-        conversation.assigned_user_id = None
-        conversation.assigned_user = None
 
-    db.commit()
-    if has_tags_column:
-        db.refresh(conversation)
-    conversation = _hydrate_legacy_tags(db, conversation)
+    svc = ConversationService(db)
+    conversation, audit_details = await svc.assign_and_broadcast(
+        conversation,
+        user,
+        actor_user_id=current_user.id,
+    )
 
     log_action(
         db,
@@ -697,28 +707,8 @@ async def assign_conversation(
         "assign_conversation",
         "conversation",
         str(conversation_id),
-        details={
-            "previous_assigned_user_id": str(previous_assigned_user_id) if previous_assigned_user_id else None,
-            "previous_assigned_user_name": previous_assigned_user_name,
-            "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
-            "assigned_user_name": conversation.assigned_user.full_name if conversation.assigned_user else None,
-        },
+        details=audit_details,
         ip_address=get_client_ip(request),
-    )
-
-    await manager.broadcast_global(
-        "conversation_updated",
-        {
-            "id": str(conversation.id),
-            "status": serialize_conversation_status(conversation.status),
-            "tag": conversation.tag.value if conversation.tag else None,
-            "tags": normalize_conversation_tags(getattr(conversation, "tags", None)),
-            "is_unread": conversation.is_unread,
-            "assigned_user_id": str(conversation.assigned_user_id) if conversation.assigned_user_id else None,
-            "assigned_user": AssignedUserSlim.model_validate(conversation.assigned_user).model_dump(mode="json")
-            if conversation.assigned_user
-            else None,
-        },
     )
 
     conversation = _hydrate_legacy_tags(db, conversation)
