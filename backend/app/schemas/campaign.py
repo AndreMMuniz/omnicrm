@@ -32,7 +32,7 @@ class CampaignLaunchRequest(BaseModel):
 
 
 class CampaignGenerateStepsRequest(BaseModel):
-    step_types: Optional[list[str]] = None
+    step_types: Optional[list[str]] = Field(default=None, max_length=8)
 
 
 class CampaignStepReviewRequest(BaseModel):

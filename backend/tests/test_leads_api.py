@@ -348,3 +348,26 @@ def test_lead_outreach_grounding_preview_returns_attributed_safe_inputs(db):
     assert "marina@example.com" not in rendered
     assert "99999" not in rendered
     assert "discount pressure" not in rendered
+
+
+def test_lead_outreach_grounding_rejects_unsupported_channel(db):
+    current_user = _seed_user(db)
+    contact = Contact(name="Marina Costa")
+    db.add(contact)
+    db.flush()
+    conversation = Conversation(contact_id=contact.id, assigned_user_id=current_user.id)
+    db.add(conversation)
+    db.flush()
+    lead = Lead(
+        conversation_id=conversation.id,
+        name="Marina Costa",
+        company="Acme",
+        source_channel="whatsapp",
+    )
+    db.add(lead)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.post(f"/api/v1/leads/{lead.id}/outreach-grounding", json={"channel": "fax"})
+
+    assert response.status_code == 422

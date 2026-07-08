@@ -292,6 +292,22 @@ def test_launch_rejects_unbounded_planned_step_count(db):
         )
 
 
+def test_launch_rejects_invalid_follow_up_interval(db):
+    actor = _seed_user(db)
+    lead = _seed_lead(db, "Interval Lead")
+    db.commit()
+
+    with pytest.raises(ValueError, match="follow_up_interval_days"):
+        OutreachCampaignService(db).launch_campaign(
+            actor=actor,
+            objective="Bad interval",
+            channel="whatsapp",
+            cadence={"timezone": "America/Sao_Paulo", "follow_up_interval_days": -1},
+            owner_user_id=actor.id,
+            lead_ids=[lead.id],
+        )
+
+
 def test_state_controls_pause_resume_stop_and_audit(db):
     actor = _seed_user(db)
     lead = _seed_lead(db, "State Lead", channel="whatsapp")
@@ -335,6 +351,33 @@ def test_state_controls_pause_resume_stop_and_audit(db):
     assert stop_log.details["new_status"] == "stopped"
 
 
+def test_resume_requires_paused_campaign_and_stop_rejects_completed(db):
+    actor = _seed_user(db)
+    lead = _seed_lead(db, "Transition Lead", channel="whatsapp")
+    service = OutreachCampaignService(db)
+    campaign = service.launch_campaign(
+        actor=actor,
+        objective="Validate transitions",
+        channel="whatsapp",
+        cadence={"planned_steps": 1},
+        owner_user_id=actor.id,
+        lead_ids=[lead.id],
+    ).campaign
+
+    with pytest.raises(ValueError, match="Only paused"):
+        service.resume_campaign(actor=actor, campaign_id=campaign.id)
+
+    campaign.status = "failed"
+    db.commit()
+    with pytest.raises(ValueError, match="Only paused"):
+        service.resume_campaign(actor=actor, campaign_id=campaign.id)
+
+    campaign.status = "completed"
+    db.commit()
+    with pytest.raises(ValueError, match="Completed campaigns"):
+        service.stop_campaign(actor=actor, campaign_id=campaign.id)
+
+
 def test_recovery_preserves_committed_steps_and_reopens_uncommitted_send(db):
     actor = _seed_user(db)
     lead = _seed_lead(db, "Recovery Lead", channel="whatsapp")
@@ -366,6 +409,119 @@ def test_recovery_preserves_committed_steps_and_reopens_uncommitted_send(db):
     state = service.inspect_state(campaign.id)
     assert state["current_step"]["id"] == str(second.id)
     assert state["next_action"] == "send_step"
+    assert state["recoverable"] is False
+    assert state["recovery_attempts"] == 1
+
+
+def test_recovery_preserves_pending_message_as_in_flight(db):
+    actor = _seed_user(db)
+    lead = _seed_lead(db, "Pending Recovery Lead", channel="whatsapp")
+    service = OutreachCampaignService(db)
+    campaign = service.launch_campaign(
+        actor=actor,
+        objective="Recover pending send",
+        channel="whatsapp",
+        cadence={"planned_steps": 1},
+        owner_user_id=actor.id,
+        lead_ids=[lead.id],
+    ).campaign
+    step = service.generate_sequence_steps(actor=actor, campaign_id=campaign.id)[0]
+    step.status = "sending"
+    step.reviewed_content = "Approved draft"
+    step.idempotency_key = f"outreach_step:{step.id}:send"
+    contact = Contact(name="Pending Recovery", phone="+5511999990000")
+    db.add(contact)
+    db.flush()
+    conversation = Conversation(contact_id=contact.id, channel=ChannelType.WHATSAPP)
+    db.add(conversation)
+    db.flush()
+    message = Message(
+        conversation_id=conversation.id,
+        content="Approved draft",
+        inbound=False,
+        owner_id=actor.id,
+        delivery_status=DeliveryStatus.PENDING,
+        idempotency_key=step.idempotency_key,
+    )
+    db.add(message)
+    db.commit()
+
+    recovered = service.recover_sequence(campaign_id=campaign.id)
+    db.refresh(step)
+
+    assert recovered == 1
+    assert step.message_id == message.id
+    assert step.status == "sending"
+    state = service.inspect_state(campaign.id)
+    assert state["next_action"] == "recover_or_wait"
+    assert state["recoverable"] is True
+
+
+def test_recovery_marks_failed_message_as_failed_not_sent(db):
+    actor = _seed_user(db)
+    lead = _seed_lead(db, "Failed Recovery Lead", channel="whatsapp")
+    service = OutreachCampaignService(db)
+    campaign = service.launch_campaign(
+        actor=actor,
+        objective="Recover failed send",
+        channel="whatsapp",
+        cadence={"planned_steps": 1},
+        owner_user_id=actor.id,
+        lead_ids=[lead.id],
+    ).campaign
+    step = service.generate_sequence_steps(actor=actor, campaign_id=campaign.id)[0]
+    contact = Contact(name="Failed Recovery", phone="+5511999990001")
+    db.add(contact)
+    db.flush()
+    conversation = Conversation(contact_id=contact.id, channel=ChannelType.WHATSAPP)
+    db.add(conversation)
+    db.flush()
+    message = Message(
+        conversation_id=conversation.id,
+        content="Rejected",
+        inbound=False,
+        owner_id=actor.id,
+        delivery_status=DeliveryStatus.FAILED,
+        delivery_error="channel rejected",
+    )
+    db.add(message)
+    db.flush()
+    step.status = "sending"
+    step.message_id = message.id
+    db.commit()
+
+    recovered = service.recover_sequence(campaign_id=campaign.id)
+    db.refresh(step)
+    db.refresh(campaign)
+
+    assert recovered == 1
+    assert step.status == "failed"
+    assert step.failure_reason == "channel rejected"
+    assert campaign.status == "failed"
+
+
+def test_recover_due_runs_scans_in_flight_campaigns(db):
+    actor = _seed_user(db)
+    lead = _seed_lead(db, "Due Recovery Lead", channel="whatsapp")
+    service = OutreachCampaignService(db)
+    campaign = service.launch_campaign(
+        actor=actor,
+        objective="Recover due run",
+        channel="whatsapp",
+        cadence={"planned_steps": 1},
+        owner_user_id=actor.id,
+        lead_ids=[lead.id],
+    ).campaign
+    step = service.generate_sequence_steps(actor=actor, campaign_id=campaign.id)[0]
+    step.status = "sending"
+    step.reviewed_content = "Approved draft"
+    db.commit()
+
+    result = service.recover_due_runs()
+    db.refresh(step)
+
+    assert result == {"recovered_campaigns": 1, "recovered_steps": 1}
+    assert step.status == "approved"
 
 
 def test_generate_sequence_steps_honors_planned_step_count_and_context(db):
@@ -387,6 +543,27 @@ def test_generate_sequence_steps_honors_planned_step_count_and_context(db):
     assert [step.step_type for step in steps] == ["initial_outreach", "follow_up", "follow_up", "follow_up"]
     assert "operations lead" in steps[0].generated_content
     assert steps[0].generation_metadata["missing_context"] is False
+
+
+def test_generate_sequence_steps_rejects_explicit_step_count_above_limit(db):
+    actor = _seed_user(db)
+    lead = _seed_lead(db, "Many Steps Lead")
+    service = OutreachCampaignService(db)
+    campaign = service.launch_campaign(
+        actor=actor,
+        objective="Avoid unbounded steps",
+        channel="whatsapp",
+        cadence={"planned_steps": 1},
+        owner_user_id=actor.id,
+        lead_ids=[lead.id],
+    ).campaign
+
+    with pytest.raises(ValueError, match="step_types"):
+        service.generate_sequence_steps(
+            actor=actor,
+            campaign_id=campaign.id,
+            step_types=["follow_up"] * 9,
+        )
 
 
 def test_review_and_skip_reject_terminal_steps(db):

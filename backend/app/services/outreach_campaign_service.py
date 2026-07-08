@@ -41,6 +41,8 @@ GENERATABLE_CHANNELS = {"whatsapp", "telegram", "email"}
 SEGMENT_FILTER_FIELDS = {"status", "channel", "qualification_label", "min_score"}
 MIN_PLANNED_STEPS = 1
 MAX_PLANNED_STEPS = 8
+MIN_FOLLOW_UP_INTERVAL_DAYS = 0
+MAX_FOLLOW_UP_INTERVAL_DAYS = 365
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class CampaignLaunchResult:
             "created_by_user_id": str(self.campaign.created_by_user_id),
             "source_type": self.campaign.source_type,
             "source_filter": self.campaign.source_filter or {},
+            "recovery_attempts": self.campaign.recovery_attempts or 0,
             "included_count": self.included_count,
             "skipped_count": self.skipped_count,
             "skipped": self.skipped,
@@ -204,28 +207,24 @@ class OutreachCampaignService:
 
     def pause_campaign(self, *, actor: User, campaign_id: UUID, reason: str | None = None) -> dict[str, Any]:
         campaign = self._get_campaign_for_actor(actor, campaign_id)
-        if campaign.status == OutreachCampaignStatus.STOPPED.value:
-            raise ValueError("Stopped campaigns cannot be paused")
-        if campaign.status == OutreachCampaignStatus.COMPLETED.value:
-            raise ValueError("Completed campaigns cannot be paused")
+        if campaign.status != OutreachCampaignStatus.ACTIVE.value:
+            raise ValueError("Only active campaigns can be paused")
         previous_status = campaign.status
         campaign.status = OutreachCampaignStatus.PAUSED.value
-        self.db.commit()
         self._log_state_transition(actor, campaign, "pause_outreach_campaign", reason, previous_status)
+        self.db.commit()
         self.db.refresh(campaign)
         return self._build_state(campaign)
 
     def resume_campaign(self, *, actor: User, campaign_id: UUID, reason: str | None = None) -> dict[str, Any]:
         campaign = self._get_campaign_for_actor(actor, campaign_id)
-        if campaign.status == OutreachCampaignStatus.STOPPED.value:
-            raise ValueError("Stopped campaigns cannot be resumed")
-        if campaign.status == OutreachCampaignStatus.COMPLETED.value:
-            raise ValueError("Completed campaigns cannot be resumed")
+        if campaign.status != OutreachCampaignStatus.PAUSED.value:
+            raise ValueError("Only paused campaigns can be resumed")
         previous_status = campaign.status
         campaign.status = OutreachCampaignStatus.ACTIVE.value
-        self.db.commit()
-        recovered = self.recover_sequence(campaign_id=campaign.id)
+        recovered = self.recover_sequence(campaign_id=campaign.id, commit=False)
         self._log_state_transition(actor, campaign, "resume_outreach_campaign", reason, previous_status, {"recovered_steps": recovered})
+        self.db.commit()
         self.db.refresh(campaign)
         return self._build_state(campaign)
 
@@ -233,6 +232,8 @@ class OutreachCampaignService:
         campaign = self._get_campaign_for_actor(actor, campaign_id)
         if campaign.status == OutreachCampaignStatus.STOPPED.value:
             return self._build_state(campaign)
+        if campaign.status == OutreachCampaignStatus.COMPLETED.value:
+            raise ValueError("Completed campaigns cannot be stopped")
         previous_status = campaign.status
         campaign.status = OutreachCampaignStatus.STOPPED.value
         cancelled = 0
@@ -245,12 +246,12 @@ class OutreachCampaignService:
             if membership.status == OutreachCampaignLeadStatus.ACTIVE.value:
                 membership.status = OutreachCampaignLeadStatus.CANCELLED.value
                 membership.skip_reason = (reason or "campaign_stopped").strip()[:255]
-        self.db.commit()
         self._log_state_transition(actor, campaign, "stop_outreach_campaign", reason, previous_status, {"cancelled_steps": cancelled})
+        self.db.commit()
         self.db.refresh(campaign)
         return self._build_state(campaign)
 
-    def recover_sequence(self, *, campaign_id: UUID) -> int:
+    def recover_sequence(self, *, campaign_id: UUID, commit: bool = True) -> int:
         campaign = self.db.query(OutreachCampaign).filter(OutreachCampaign.id == campaign_id).first()
         if not campaign:
             raise LookupError("Campaign not found")
@@ -260,29 +261,82 @@ class OutreachCampaignService:
             if step.status != OutreachSequenceStepStatus.SENDING.value:
                 continue
             if step.message_id:
-                step.status = OutreachSequenceStepStatus.SENT.value
-                step.committed_at = step.committed_at or datetime.now(timezone.utc)
+                if step.message and step.message.delivery_status == DeliveryStatus.FAILED:
+                    step.status = OutreachSequenceStepStatus.FAILED.value
+                    step.failure_reason = step.message.delivery_error or "delivery_failed"
+                    campaign.status = OutreachCampaignStatus.FAILED.value
+                elif step.message and step.message.delivery_status in {DeliveryStatus.SENT, DeliveryStatus.DELIVERED}:
+                    step.status = OutreachSequenceStepStatus.SENT.value
+                    step.committed_at = step.committed_at or datetime.now(timezone.utc)
+                else:
+                    step.status = OutreachSequenceStepStatus.SENDING.value
             else:
-                step.status = (
-                    OutreachSequenceStepStatus.APPROVED.value
-                    if step.reviewed_content
-                    else OutreachSequenceStepStatus.NEEDS_REVIEW.value
-                )
+                existing_message = None
+                if step.idempotency_key:
+                    existing_message = MessageService(self.db)._creation.find_by_idempotency_key(step.idempotency_key)
+                if existing_message and existing_message.delivery_status in {DeliveryStatus.SENT, DeliveryStatus.DELIVERED}:
+                    step.message_id = existing_message.id
+                    step.status = OutreachSequenceStepStatus.SENT.value
+                    step.committed_at = step.committed_at or datetime.now(timezone.utc)
+                elif existing_message and existing_message.delivery_status == DeliveryStatus.FAILED:
+                    step.message_id = existing_message.id
+                    step.status = OutreachSequenceStepStatus.FAILED.value
+                    step.failure_reason = existing_message.delivery_error or "delivery_failed"
+                    campaign.status = OutreachCampaignStatus.FAILED.value
+                elif existing_message:
+                    step.message_id = existing_message.id
+                    step.status = OutreachSequenceStepStatus.SENDING.value
+                else:
+                    step.status = (
+                        OutreachSequenceStepStatus.APPROVED.value
+                        if step.reviewed_content
+                        else OutreachSequenceStepStatus.NEEDS_REVIEW.value
+                    )
                 step.started_at = None
             recovered += 1
+
+        if recovered:
+            campaign.recovery_attempts = (campaign.recovery_attempts or 0) + 1
 
         if (
             campaign.status == OutreachCampaignStatus.ACTIVE.value
             and campaign.steps
-            and all(step.status in self._terminal_step_statuses() for step in campaign.steps)
+            and all(step.status in self._successful_terminal_step_statuses() for step in campaign.steps)
         ):
             campaign.status = OutreachCampaignStatus.COMPLETED.value
             self._complete_active_memberships(campaign)
 
-        if recovered:
+        if recovered and commit:
             self.db.commit()
             self.db.refresh(campaign)
         return recovered
+
+    def recover_due_runs(self, *, limit: int = 100) -> dict[str, int]:
+        if limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        campaigns = (
+            self.db.query(OutreachCampaign)
+            .join(OutreachSequenceStep, OutreachSequenceStep.campaign_id == OutreachCampaign.id)
+            .filter(
+                OutreachCampaign.status.in_(
+                    [
+                        OutreachCampaignStatus.ACTIVE.value,
+                        OutreachCampaignStatus.PAUSED.value,
+                    ]
+                ),
+                OutreachSequenceStep.status == OutreachSequenceStepStatus.SENDING.value,
+            )
+            .order_by(OutreachCampaign.updated_at.asc())
+            .distinct()
+            .limit(limit)
+            .all()
+        )
+        recovered_steps = 0
+        for campaign in campaigns:
+            recovered_steps += self.recover_sequence(campaign_id=campaign.id, commit=False)
+        if recovered_steps:
+            self.db.commit()
+        return {"recovered_campaigns": len(campaigns), "recovered_steps": recovered_steps}
 
     def generate_sequence_steps(
         self,
@@ -295,6 +349,8 @@ class OutreachCampaignService:
         if not campaign:
             raise LookupError("Campaign not found")
         self._ensure_campaign_actor(actor, campaign)
+        if campaign.status not in {OutreachCampaignStatus.ACTIVE.value, OutreachCampaignStatus.PAUSED.value}:
+            raise ValueError("Sequence steps can only be generated for active or paused campaigns")
 
         normalized_step_types = self._normalize_step_types(step_types, campaign.cadence or {})
         created: list[OutreachSequenceStep] = []
@@ -369,6 +425,8 @@ class OutreachCampaignService:
         if step.status in self._terminal_step_statuses() or step.status == OutreachSequenceStepStatus.SENDING.value:
             raise ValueError("Step cannot be skipped in its current status")
         if step.campaign.status in {
+            OutreachCampaignStatus.PAUSED.value,
+            OutreachCampaignStatus.FAILED.value,
             OutreachCampaignStatus.STOPPED.value,
             OutreachCampaignStatus.COMPLETED.value,
         }:
@@ -433,6 +491,7 @@ class OutreachCampaignService:
         self.db.commit()
         self.db.refresh(step)
 
+        self._ensure_step_claim_still_sendable(step)
         try:
             conversation = self._conversation_for_step(step)
             message = await MessageService(self.db).send_from_dashboard(
@@ -455,10 +514,13 @@ class OutreachCampaignService:
             step.status = OutreachSequenceStepStatus.FAILED.value
             step.failure_reason = message.delivery_error or "delivery_failed"
             step.campaign.status = OutreachCampaignStatus.FAILED.value
-        else:
+        elif message.delivery_status in {DeliveryStatus.SENT, DeliveryStatus.DELIVERED}:
             step.status = OutreachSequenceStepStatus.SENT.value
             step.failure_reason = None
             self._refresh_campaign_terminal_status(step.campaign)
+        else:
+            step.status = OutreachSequenceStepStatus.SENDING.value
+            step.failure_reason = None
         self.db.commit()
         self.db.refresh(step)
         return step
@@ -565,6 +627,7 @@ class OutreachCampaignService:
             "created_by_user_id": str(campaign.created_by_user_id),
             "source_type": campaign.source_type,
             "source_filter": campaign.source_filter or {},
+            "recovery_attempts": campaign.recovery_attempts or 0,
             "created_at": campaign.created_at.isoformat() if campaign.created_at else None,
             "updated_at": campaign.updated_at.isoformat() if campaign.updated_at else None,
         }
@@ -606,6 +669,10 @@ class OutreachCampaignService:
             normalized = [OutreachSequenceStepType.INITIAL_OUTREACH.value]
             if planned_steps > 1:
                 normalized.extend([OutreachSequenceStepType.FOLLOW_UP.value] * (planned_steps - 1))
+        if not normalized:
+            raise ValueError("At least one step type is required")
+        if len(normalized) > MAX_PLANNED_STEPS:
+            raise ValueError(f"step_types must include at most {MAX_PLANNED_STEPS} steps")
         allowed = {item.value for item in OutreachSequenceStepType}
         invalid = [item for item in normalized if item not in allowed]
         if invalid:
@@ -623,6 +690,7 @@ class OutreachCampaignService:
 
     def _validate_cadence(self, cadence: dict[str, Any]) -> None:
         self._planned_step_count(cadence)
+        self._follow_up_interval_days(cadence)
 
     def _build_sequence_step(
         self,
@@ -663,8 +731,20 @@ class OutreachCampaignService:
 
     def _due_at(self, cadence: dict[str, Any], position: int) -> datetime:
         start_at = datetime.now(timezone.utc)
-        interval_days = int(cadence.get("follow_up_interval_days") or 2)
+        interval_days = self._follow_up_interval_days(cadence)
         return start_at + timedelta(days=max(position - 1, 0) * interval_days)
+
+    def _follow_up_interval_days(self, cadence: dict[str, Any]) -> int:
+        try:
+            interval_days = int(cadence.get("follow_up_interval_days") or 2)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("cadence.follow_up_interval_days must be an integer") from exc
+        if interval_days < MIN_FOLLOW_UP_INTERVAL_DAYS or interval_days > MAX_FOLLOW_UP_INTERVAL_DAYS:
+            raise ValueError(
+                "cadence.follow_up_interval_days must be between "
+                f"{MIN_FOLLOW_UP_INTERVAL_DAYS} and {MAX_FOLLOW_UP_INTERVAL_DAYS}"
+            )
+        return interval_days
 
     def _generate_channel_content(
         self,
@@ -747,6 +827,8 @@ class OutreachCampaignService:
             "current_step": self._serialize_step(current_step) if current_step else None,
             "last_action": self._action_summary(last_step) if last_step else None,
             "next_action": self._next_action(campaign, current_step),
+            "recoverable": self._is_recoverable(campaign),
+            "recovery_attempts": campaign.recovery_attempts or 0,
         }
 
     def _last_action_step(self, steps: list[OutreachSequenceStep]) -> OutreachSequenceStep | None:
@@ -787,6 +869,8 @@ class OutreachCampaignService:
             return "none"
         if campaign.status == OutreachCampaignStatus.COMPLETED.value:
             return "none"
+        if campaign.status == OutreachCampaignStatus.FAILED.value:
+            return "review_failure"
         if not current_step:
             return "complete_campaign"
         if current_step.status == OutreachSequenceStepStatus.NEEDS_REVIEW.value:
@@ -807,11 +891,34 @@ class OutreachCampaignService:
             OutreachSequenceStepStatus.CANCELLED.value,
         }
 
+    def _successful_terminal_step_statuses(self) -> set[str]:
+        return {
+            OutreachSequenceStepStatus.SENT.value,
+            OutreachSequenceStepStatus.SKIPPED.value,
+            OutreachSequenceStepStatus.CANCELLED.value,
+        }
+
+    def _is_recoverable(self, campaign: OutreachCampaign) -> bool:
+        if campaign.status in {OutreachCampaignStatus.STOPPED.value, OutreachCampaignStatus.COMPLETED.value}:
+            return False
+        return any(step.status == OutreachSequenceStepStatus.SENDING.value for step in campaign.steps)
+
     def _ensure_campaign_actor(self, actor: User, campaign: OutreachCampaign) -> None:
         user_type = actor.user_type
         can_manage = bool(user_type and (user_type.can_view_all_conversations or user_type.can_change_settings))
         if actor.id not in {campaign.owner_user_id, campaign.created_by_user_id} and not can_manage:
             raise PermissionError("Permission denied for this campaign")
+
+    def _ensure_step_claim_still_sendable(self, step: OutreachSequenceStep) -> None:
+        self.db.refresh(step)
+        self.db.refresh(step.campaign)
+        if step.status != OutreachSequenceStepStatus.SENDING.value:
+            raise ValueError("Step is no longer sending")
+        if step.campaign.status != OutreachCampaignStatus.ACTIVE.value:
+            step.status = OutreachSequenceStepStatus.APPROVED.value
+            step.started_at = None
+            self.db.commit()
+            raise ValueError("Campaign is not active")
 
     def _mark_step_skipped(self, step: OutreachSequenceStep, reason: str) -> OutreachSequenceStep:
         step.status = OutreachSequenceStepStatus.SKIPPED.value
@@ -960,4 +1067,5 @@ class OutreachCampaignService:
             "outreach_campaign",
             str(campaign.id),
             details,
+            commit=False,
         )

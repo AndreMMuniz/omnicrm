@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
+import re
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.models import (
@@ -15,12 +18,19 @@ from app.models.models import (
     Message,
     Project,
     Proposal,
+    ProposalStatus,
     User,
 )
 
 
 SENSITIVE_FIELD_PARTS = {"email", "phone", "hash", "token", "secret", "password", "credential"}
 FALLBACK_INSTRUCTION = "use neutral outreach, no unsupported claims"
+EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
+OUTREACH_CHANNELS = {"email", "whatsapp", "sms"}
+ALLOWED_PROPOSAL_STATUSES = {ProposalStatus.SENT, ProposalStatus.APPROVED}
+
+log = logging.getLogger(__name__)
 
 
 class OutreachGroundingService:
@@ -50,11 +60,11 @@ class OutreachGroundingService:
         self._add_scoring_facts(lead, facts, omitted_sources)
         self._add_inferences(lead, inferences, omitted_sources)
         self._add_conversation_facts(lead, facts, omitted_sources)
-        client = self._linked_client(lead)
+        client = self._linked_client(lead, omitted_sources)
         self._add_client_facts(client, facts, omitted_sources)
-        self._add_project_facts(lead, client, facts, omitted_sources)
-        self._add_proposal_facts(client, facts, omitted_sources)
-        self._add_catalog_facts(facts, omitted_sources)
+        self._add_project_facts(actor, lead, client, facts, omitted_sources)
+        self._add_proposal_facts(actor, client, facts, omitted_sources)
+        self._add_catalog_facts(lead, client, channel, facts, omitted_sources)
 
         fallback_mode = not self._has_personalization_context(facts, inferences)
         citations = self._citations(facts, inferences)
@@ -94,12 +104,14 @@ class OutreachGroundingService:
 
     def _ensure_actor_can_use_lead(self, actor: User, lead: Lead) -> None:
         conversation = lead.conversation
-        if not conversation or not conversation.assigned_user_id:
-            return
         can_view_all = bool(
             actor.user_type
             and (actor.user_type.can_view_all_conversations or actor.user_type.can_change_settings)
         )
+        if not conversation or not conversation.assigned_user_id:
+            if can_view_all:
+                return
+            raise PermissionError("Permission denied for this lead grounding scope")
         if conversation.assigned_user_id != actor.id and not can_view_all:
             raise PermissionError("Permission denied for this lead grounding scope")
 
@@ -235,13 +247,17 @@ class OutreachGroundingService:
         if not conversation:
             omitted_sources.append({"source_type": "conversation", "reason": "not_linked"})
             return
-        rows = (
-            self.db.query(Message)
-            .filter(Message.conversation_id == conversation.id)
-            .order_by(Message.conversation_sequence.asc(), Message.created_at.asc())
-            .limit(20)
-            .all()
-        )
+        try:
+            rows = (
+                self.db.query(Message)
+                .filter(Message.conversation_id == conversation.id)
+                .order_by(Message.conversation_sequence.asc(), Message.created_at.asc())
+                .limit(20)
+                .all()
+            )
+        except SQLAlchemyError as exc:
+            self._record_source_error("conversation", exc, omitted_sources)
+            return
         public_rows = [row for row in rows if not row.is_internal]
         if len(public_rows) != len(rows):
             omitted_sources.append({"source_type": "conversation", "reason": "internal_message"})
@@ -255,13 +271,21 @@ class OutreachGroundingService:
                 source_field="messages.content",
             )
 
-    def _linked_client(self, lead: Lead) -> Client | None:
+    def _linked_client(
+        self,
+        lead: Lead,
+        omitted_sources: list[dict[str, str]],
+    ) -> Client | None:
         conversation = lead.conversation
         contact = conversation.contact if conversation else None
         if contact and contact.client:
             return contact.client
         if contact and contact.client_id:
-            return self.db.query(Client).filter(Client.id == contact.client_id).first()
+            try:
+                return self.db.query(Client).filter(Client.id == contact.client_id).first()
+            except SQLAlchemyError as exc:
+                self._record_source_error("client", exc, omitted_sources)
+                return None
         return None
 
     def _add_client_facts(
@@ -290,22 +314,40 @@ class OutreachGroundingService:
 
     def _add_project_facts(
         self,
+        actor: User,
         lead: Lead,
         client: Client | None,
         facts: list[dict[str, Any]],
         omitted_sources: list[dict[str, str]],
     ) -> None:
-        query = self.db.query(Project)
-        if client:
-            query = query.filter(Project.client_id == client.id)
-        elif lead.conversation_id:
-            query = query.filter(Project.source_conversation_id == lead.conversation_id)
-        else:
+        if not client and not lead.conversation_id:
             omitted_sources.append({"source_type": "project", "reason": "not_linked"})
             return
-        project = query.order_by(Project.updated_at.desc()).first()
+        try:
+            query = self.db.query(Project)
+            if lead.conversation_id:
+                query = query.filter(Project.source_conversation_id == lead.conversation_id)
+                project = query.order_by(Project.updated_at.desc()).first()
+            else:
+                project = None
+            if not project and client:
+                query = self.db.query(Project).filter(Project.client_id == client.id)
+                if not self._actor_can_use_related_records(actor):
+                    query = query.filter(
+                        (Project.owner_user_id == actor.id)
+                        | (Project.created_by_user_id == actor.id)
+                    )
+                project = query.order_by(Project.updated_at.desc()).first()
+        except SQLAlchemyError as exc:
+            self._record_source_error("project", exc, omitted_sources)
+            return
         if not project:
-            omitted_sources.append({"source_type": "project", "reason": "not_linked"})
+            omitted_sources.append(
+                {
+                    "source_type": "project",
+                    "reason": "not_permitted" if client and not self._actor_can_use_related_records(actor) else "not_linked",
+                }
+            )
             return
         for key, value, field in [
             ("project.title", project.title, "title"),
@@ -323,6 +365,7 @@ class OutreachGroundingService:
 
     def _add_proposal_facts(
         self,
+        actor: User,
         client: Client | None,
         facts: list[dict[str, Any]],
         omitted_sources: list[dict[str, str]],
@@ -330,14 +373,27 @@ class OutreachGroundingService:
         if not client:
             omitted_sources.append({"source_type": "proposal", "reason": "not_linked"})
             return
-        proposal = (
-            self.db.query(Proposal)
-            .filter(Proposal.client_id == client.id)
-            .order_by(Proposal.updated_at.desc())
-            .first()
-        )
+        try:
+            query = self.db.query(Proposal).filter(
+                Proposal.client_id == client.id,
+                Proposal.status.in_(ALLOWED_PROPOSAL_STATUSES),
+            )
+            if not self._actor_can_use_related_records(actor):
+                query = query.filter(
+                    (Proposal.owner_user_id == actor.id)
+                    | (Proposal.created_by_user_id == actor.id)
+                )
+            proposal = query.order_by(Proposal.updated_at.desc()).first()
+        except SQLAlchemyError as exc:
+            self._record_source_error("proposal", exc, omitted_sources)
+            return
         if not proposal:
-            omitted_sources.append({"source_type": "proposal", "reason": "not_linked"})
+            omitted_sources.append(
+                {
+                    "source_type": "proposal",
+                    "reason": "not_permitted" if not self._actor_can_use_related_records(actor) else "not_linked",
+                }
+            )
             return
         for key, value, field in [
             ("proposal.title", proposal.title, "title"),
@@ -355,19 +411,32 @@ class OutreachGroundingService:
 
     def _add_catalog_facts(
         self,
+        lead: Lead,
+        client: Client | None,
+        channel: str | None,
         facts: list[dict[str, Any]],
         omitted_sources: list[dict[str, str]],
     ) -> None:
-        items = (
-            self.db.query(CatalogItem)
-            .filter(
-                CatalogItem.status == CatalogItemStatus.ACTIVE,
-                CatalogItem.active_for_support.is_(True),
+        if channel and channel not in OUTREACH_CHANNELS:
+            omitted_sources.append({"source_type": "catalog_item", "reason": "not_permitted"})
+            return
+        if not client and not lead.company:
+            omitted_sources.append({"source_type": "catalog_item", "reason": "not_linked"})
+            return
+        try:
+            items = (
+                self.db.query(CatalogItem)
+                .filter(
+                    CatalogItem.status == CatalogItemStatus.ACTIVE,
+                    CatalogItem.active_for_support.is_(True),
+                )
+                .order_by(CatalogItem.updated_at.desc())
+                .limit(2)
+                .all()
             )
-            .order_by(CatalogItem.updated_at.desc())
-            .limit(2)
-            .all()
-        )
+        except SQLAlchemyError as exc:
+            self._record_source_error("catalog_item", exc, omitted_sources)
+            return
         if not items:
             omitted_sources.append({"source_type": "catalog_item", "reason": "not_linked"})
             return
@@ -432,6 +501,22 @@ class OutreachGroundingService:
             }
         )
 
+    def _actor_can_use_related_records(self, actor: User) -> bool:
+        return bool(
+            actor.user_type
+            and (actor.user_type.can_view_all_conversations or actor.user_type.can_change_settings)
+        )
+
+    def _record_source_error(
+        self,
+        source_type: str,
+        exc: SQLAlchemyError,
+        omitted_sources: list[dict[str, str]],
+    ) -> None:
+        log.warning("outreach_grounding: source %s unavailable: %s", source_type, exc)
+        self.db.rollback()
+        omitted_sources.append({"source_type": source_type, "reason": "source_error"})
+
     def _safe_value(self, key: str, value: Any) -> Any:
         if value is None or value == "":
             return None
@@ -453,7 +538,13 @@ class OutreachGroundingService:
                 return None
             if any(part in lowered_value for part in SENSITIVE_FIELD_PARTS):
                 return None
+            return self._redact_sensitive_text(value)
         return value
+
+    def _redact_sensitive_text(self, value: str) -> str:
+        redacted = EMAIL_RE.sub("[redacted-email]", value)
+        redacted = PHONE_RE.sub("[redacted-phone]", redacted)
+        return redacted
 
     def _has_personalization_context(
         self,
@@ -469,7 +560,11 @@ class OutreachGroundingService:
             "lead.identity_confidence",
             "lead.identity_match_reasons",
         }
-        return any(item["key"] not in minimal_fact_keys for item in facts)
+        return any(
+            item["key"] not in minimal_fact_keys
+            and item["source_type"] != "catalog_item"
+            for item in facts
+        )
 
     def _citations(
         self,

@@ -50,11 +50,15 @@ class OmittedGroundingSource(BaseModel):
     reason: str
 
 
-class OutreachGroundingRequest(BaseModel):
-    channel: Optional[str] = None
-    scope: str = Field(default="lead_outreach", min_length=1)
+OutreachChannel = Literal["email", "whatsapp", "sms"]
+OutreachGroundingScope = Literal["lead_outreach"]
 
-    @field_validator("channel", "scope", mode="before")
+
+class OutreachGroundingRequest(BaseModel):
+    channel: Optional[OutreachChannel] = None
+    scope: OutreachGroundingScope = Field(default="lead_outreach")
+
+    @field_validator("channel", mode="before")
     @classmethod
     def strip_text(cls, value: object) -> object:
         if isinstance(value, str):

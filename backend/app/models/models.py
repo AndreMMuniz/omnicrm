@@ -760,6 +760,7 @@ class OutreachCampaign(Base):
     created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     source_type = Column(String(30), nullable=False, default=OutreachCampaignSourceType.LEAD_SELECTION.value)
     source_filter = Column(JSON, nullable=False, default=dict)
+    recovery_attempts = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

@@ -28,6 +28,7 @@ def upgrade() -> None:
         sa.Column("created_by_user_id", UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("source_type", sa.String(30), nullable=False, server_default="lead_selection"),
         sa.Column("source_filter", sa.JSON(), nullable=False, server_default="{}"),
+        sa.Column("recovery_attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )

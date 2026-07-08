@@ -295,4 +295,4 @@ def test_campaign_state_pause_resume_stop_endpoints(db):
 
     blocked_resume = client.post(f"/api/v1/campaigns/{campaign_id}/resume", json={})
     assert blocked_resume.status_code == 400
-    assert "Stopped campaigns" in blocked_resume.json()["detail"]
+    assert "Only paused campaigns" in blocked_resume.json()["detail"]

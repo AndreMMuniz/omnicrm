@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, event
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -12,6 +13,7 @@ from app.models.models import (
     AuditLog,
     CatalogCategory,
     CatalogItem,
+    CatalogItemType,
     ChannelType,
     Client,
     Contact,
@@ -203,7 +205,7 @@ def test_grounding_includes_attributed_sources_and_excludes_sensitive_internal_c
 
 
 def test_grounding_degrades_to_fallback_with_omissions_for_sparse_context(db):
-    actor = _seed_user(db)
+    actor = _seed_user(db, can_view_all=True)
     lead = Lead(name="Sparse Lead", company=None, source_channel="email")
     db.add(lead)
     db.commit()
@@ -217,6 +219,48 @@ def test_grounding_degrades_to_fallback_with_omissions_for_sparse_context(db):
     assert {"not_enriched", "not_scored", "not_linked"}.issubset(omission_reasons)
 
 
+def test_grounding_redacts_pii_from_innocuous_source_facts_and_public_messages(db):
+    actor = _seed_user(db)
+    lead = _seed_grounded_lead(db, actor)
+    lead.source_facts["lead"]["note"] = "Reach Marina at marina.private@example.com or +55 11 98888-7777."
+    db.add(
+        Message(
+            conversation_id=lead.conversation_id,
+            content="Please contact me at marina.ops@example.com or +55 11 97777-6666 about proposal follow-up.",
+            inbound=True,
+            is_internal=False,
+            conversation_sequence=3,
+        )
+    )
+    db.commit()
+
+    result = OutreachGroundingService(db).build_for_lead(actor=actor, lead_id=lead.id, channel="whatsapp")
+
+    rendered = str(result)
+    assert "marina.private@example.com" not in rendered
+    assert "marina.ops@example.com" not in rendered
+    assert "98888-7777" not in rendered
+    assert "97777-6666" not in rendered
+    assert "[redacted-email]" in rendered
+    assert "[redacted-phone]" in rendered
+    assert "proposal follow-up" in rendered
+
+
+def test_unlinked_lead_grounding_requires_elevated_visibility(db):
+    actor = _seed_user(db)
+    manager = _seed_user(db, email="manager-unlinked@example.com", can_view_all=True)
+    lead = Lead(name="Loose Lead", source_channel="email")
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+
+    with pytest.raises(PermissionError):
+        OutreachGroundingService(db).build_for_lead(actor=actor, lead_id=lead.id, channel="email")
+
+    result = OutreachGroundingService(db).build_for_lead(actor=manager, lead_id=lead.id, channel="email")
+    assert result["fallback_mode"] is True
+
+
 def test_grounding_rejects_unassigned_conversation_without_manager_permission(db):
     owner = _seed_user(db, email="owner@example.com")
     other = _seed_user(db, email="other@example.com")
@@ -228,6 +272,55 @@ def test_grounding_rejects_unassigned_conversation_without_manager_permission(db
 
     result = OutreachGroundingService(db).build_for_lead(actor=manager, lead_id=lead.id, channel="whatsapp")
     assert result["fallback_mode"] is False
+
+
+def test_source_retrieval_error_degrades_to_omission(db, monkeypatch):
+    actor = _seed_user(db)
+    lead = _seed_grounded_lead(db, actor)
+    service = OutreachGroundingService(db)
+    original_query = db.query
+
+    def broken_query(model):
+        if model is Message:
+            raise SQLAlchemyError("messages unavailable")
+        return original_query(model)
+
+    monkeypatch.setattr(service.db, "query", broken_query)
+
+    result = service.build_for_lead(actor=actor, lead_id=lead.id, channel="whatsapp")
+
+    assert result["fallback_mode"] is False
+    assert {"source_type": "conversation", "reason": "source_error"} in result["omitted_sources"]
+
+
+def test_global_catalog_alone_does_not_disable_fallback(db):
+    actor = _seed_user(db, can_view_all=True)
+    category = CatalogCategory(key="ops", label="Operations", is_active=True)
+    db.add(category)
+    db.flush()
+    db.add(
+        CatalogItem(
+            name="Support Automation",
+            commercial_name="Support Automation",
+            type=CatalogItemType.SERVICE,
+            category="ops",
+            category_id=category.id,
+            commercial_description="Automates support workflows",
+            base_price=1000,
+            unit="month",
+            created_by_user_id=actor.id,
+            updated_by_user_id=actor.id,
+        )
+    )
+    lead = Lead(name="Sparse Lead", company=None, source_channel="email")
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+
+    result = OutreachGroundingService(db).build_for_lead(actor=actor, lead_id=lead.id, channel="email")
+
+    assert result["fallback_mode"] is True
+    assert not any(item["source_type"] == "catalog_item" for item in result["facts"])
 
 
 def test_ai_engine_graphs_do_not_import_orm_for_grounding():
