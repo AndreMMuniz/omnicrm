@@ -363,6 +363,158 @@ def test_manager_can_change_status_for_other_users_conversation(db, monkeypatch)
     assert response.json()["data"]["status"] == "pending"
 
 
+def test_update_conversation_marks_follow_up_and_broadcasts_state(db, monkeypatch):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.WHATSAPP,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    events = []
+
+    async def fake_broadcast_global(event_type, data):
+        events.append((event_type, data))
+
+    monkeypatch.setattr(manager, "broadcast_global", fake_broadcast_global)
+
+    client = _make_client(db, current_user)
+    response = client.patch(
+        f"/api/v1/chat/conversations/{conversation.id}",
+        json={
+            "needs_follow_up": True,
+            "follow_up_note": "Confirm proposal acceptance tomorrow.",
+            "follow_up_at": "2026-07-09T12:30:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["needs_follow_up"] is True
+    assert payload["follow_up_note"] == "Confirm proposal acceptance tomorrow."
+    assert payload["follow_up_at"].startswith("2026-07-09T12:30:00")
+
+    db.refresh(conversation)
+    assert conversation.needs_follow_up is True
+    assert conversation.follow_up_note == "Confirm proposal acceptance tomorrow."
+
+    assert len(events) == 1
+    event_type, data = events[0]
+    assert event_type == "conversation_updated"
+    assert data["needs_follow_up"] is True
+    assert data["follow_up_note"] == "Confirm proposal acceptance tomorrow."
+    assert data["follow_up_at"].startswith("2026-07-09T12:30:00")
+
+
+def test_update_conversation_clears_follow_up_state(db, monkeypatch):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.EMAIL,
+        status=ConversationStatus.OPEN,
+        needs_follow_up=True,
+        follow_up_note="Call back after contract review.",
+    )
+    db.add(conversation)
+    db.commit()
+
+    async def fake_broadcast_global(event_type, data):
+        return None
+
+    monkeypatch.setattr(manager, "broadcast_global", fake_broadcast_global)
+
+    client = _make_client(db, current_user)
+    response = client.patch(
+        f"/api/v1/chat/conversations/{conversation.id}",
+        json={
+            "needs_follow_up": False,
+            "follow_up_note": None,
+            "follow_up_at": None,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["needs_follow_up"] is False
+    assert payload["follow_up_note"] is None
+    assert payload["follow_up_at"] is None
+
+    db.refresh(conversation)
+    assert conversation.needs_follow_up is False
+    assert conversation.follow_up_note is None
+    assert conversation.follow_up_at is None
+
+
+def test_list_conversations_filters_by_follow_up_state(db):
+    current_user = _seed_manager(db, "manager@example.com", "Manager User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    follow_up_conversation = Conversation(
+        contact_id=contact.id,
+        channel=ChannelType.WEB,
+        status=ConversationStatus.OPEN,
+        needs_follow_up=True,
+        follow_up_note="Needs renewal answer.",
+    )
+    normal_conversation = Conversation(
+        contact_id=contact.id,
+        channel=ChannelType.EMAIL,
+        status=ConversationStatus.OPEN,
+        needs_follow_up=False,
+    )
+    db.add_all([follow_up_conversation, normal_conversation])
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get("/api/v1/chat/conversations?needs_follow_up=true")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["meta"]["total"] == 1
+    assert payload["data"][0]["id"] == str(follow_up_conversation.id)
+    assert payload["data"][0]["needs_follow_up"] is True
+
+
+def test_follow_up_update_respects_conversation_ownership_permissions(db):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    owner_user = _seed_user(db, "owner@example.com", "Owner User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=owner_user.id,
+        channel=ChannelType.EMAIL,
+        status=ConversationStatus.OPEN,
+    )
+    db.add(conversation)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.patch(
+        f"/api/v1/chat/conversations/{conversation.id}",
+        json={"needs_follow_up": True},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"]["code"] == "FORBIDDEN"
+
+
 def test_create_internal_note_persists_author_without_changing_preview(db, monkeypatch):
     current_user = _seed_user(db, "agent@example.com", "Agent User")
     contact = Contact(name="Client")

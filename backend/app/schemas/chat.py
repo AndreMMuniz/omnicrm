@@ -194,6 +194,9 @@ class ConversationBase(BaseModel):
     status: ConversationStatus
     tag: Optional[ConversationTag] = None
     tags: List[ConversationTag] = Field(default_factory=list)
+    needs_follow_up: bool = False
+    follow_up_note: Optional[str] = None
+    follow_up_at: Optional[datetime] = None
     is_unread: bool = False
 
     @field_validator("tag", mode="before")
@@ -230,6 +233,9 @@ class ConversationUpdate(BaseModel):
     status: Optional[ConversationStatus] = None
     tag: Optional[ConversationTag] = None
     tags: Optional[List[ConversationTag]] = None
+    needs_follow_up: Optional[bool] = None
+    follow_up_note: Optional[str] = None
+    follow_up_at: Optional[datetime] = None
     is_unread: Optional[bool] = None
     assigned_user_id: Optional[UUID] = None
 

@@ -236,6 +236,9 @@ class Conversation(Base):
     status = Column(Enum(ConversationStatus), default=ConversationStatus.OPEN)
     tag = Column(Enum(ConversationTag), nullable=True)
     tags = Column(JSON, nullable=False, default=list)
+    needs_follow_up = Column(Boolean, default=False, nullable=False, index=True)
+    follow_up_note = Column(Text, nullable=True)
+    follow_up_at = Column(DateTime(timezone=True), nullable=True)
 
     is_unread = Column(Boolean, default=False)
     last_message = Column(Text, nullable=True)

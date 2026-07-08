@@ -134,6 +134,9 @@ export interface Conversation {
   status: ConversationStatus;
   tag?: ConversationTag | null;
   tags: ConversationTag[];
+  needs_follow_up: boolean;
+  follow_up_note?: string | null;
+  follow_up_at?: string | null;
   is_unread: boolean;
   last_message?: string;
   last_message_date?: string;
@@ -187,6 +190,9 @@ export interface UpdateConversationRequest {
   status?: ConversationStatus;
   tag?: ConversationTag | null;
   tags?: ConversationTag[];
+  needs_follow_up?: boolean;
+  follow_up_note?: string | null;
+  follow_up_at?: string | null;
   is_unread?: boolean;
 }
 

@@ -39,6 +39,18 @@ import AudioMessage from '@/components/AudioMessage';
 import { useState as useLocalState } from 'react';
 import { useMessagesSessionContext } from '@/contexts/MessagesSessionContext';
 import { getMessagesWorkspaceFilters, saveMessagesWorkspaceFilters } from '@/lib/messagesSessionCache';
+import {
+  applyQuickReplyToDraft,
+  canManageQuickReplies,
+  shouldShowQuickReplyCreationControls,
+} from '@/lib/quickReplyComposer';
+import {
+  buildClearFollowUpPatch,
+  buildFollowUpPatch,
+  getFollowUpCueLabel,
+  matchesFollowUpFilter,
+  type FollowUpFilter,
+} from '@/lib/followUpPrompts';
 
 // ── Assignment Panel (Story 3.5) ──────────────────────────────────────────────
 
@@ -233,6 +245,33 @@ function ConversationStatusBadge({
   return (
     <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold", meta.badgeClassName, className)}>
       {status === 'RESOLVED' ? '✓ ' : ''}{meta.shortLabel}
+    </span>
+  );
+}
+
+function FollowUpBadge({
+  conversation,
+  compact = false,
+  className,
+}: {
+  conversation: Pick<Conversation, 'needs_follow_up' | 'follow_up_note' | 'follow_up_at'>;
+  compact?: boolean;
+  className?: string;
+}) {
+  const label = getFollowUpCueLabel(conversation);
+  if (!label) return null;
+
+  return (
+    <span
+      className={cn(
+        "inline-flex max-w-full items-center gap-1 rounded-full border border-amber-200 bg-amber-50 font-semibold text-amber-800",
+        compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-[11px]",
+        className
+      )}
+      title={label}
+    >
+      <span className={cn("material-symbols-outlined", compact ? "text-[12px]" : "text-[14px]")}>flag</span>
+      <span className="truncate">{compact ? "Follow-up" : label}</span>
     </span>
   );
 }
@@ -475,11 +514,13 @@ function MessageContextMenu({
   message,
   outbound,
   linkedProject,
+  canCreateQuickReply,
   onSelect,
 }: {
   message: Message;
   outbound: boolean;
   linkedProject?: ProjectDto;
+  canCreateQuickReply: boolean;
   onSelect: (action: MessageActionId, message: Message) => void;
 }) {
   const items: Array<{ id: MessageActionId; label: string; icon: string; tone?: 'default' | 'danger' }> = [
@@ -488,7 +529,7 @@ function MessageContextMenu({
       : { id: 'create-card', label: 'Create Card', icon: 'add_card' },
     { id: 'create-task', label: 'Create Task', icon: 'checklist' },
     { id: 'add-tag', label: 'Add Tag', icon: 'sell' },
-    ...(outbound ? [{ id: 'create-quick-reply' as const, label: 'Create Quick Reply', icon: 'quickreply' }] : []),
+    ...(outbound && canCreateQuickReply ? [{ id: 'create-quick-reply' as const, label: 'Create Quick Reply', icon: 'quickreply' }] : []),
     { id: 'delete', label: 'Delete', icon: 'delete', tone: 'danger' },
   ];
 
@@ -1117,6 +1158,7 @@ export default function ChatPage() {
   const [searchQuery, setSearchQuery] = useState(cachedFilters.searchQuery);
   const [selectedChannel, setSelectedChannel] = useState<'ALL' | ChannelType>(cachedFilters.selectedChannel as 'ALL' | ChannelType);
   const [selectedTag, setSelectedTag] = useState<'ALL' | ConversationTag>(cachedFilters.selectedTag as 'ALL' | ConversationTag);
+  const [selectedFollowUp, setSelectedFollowUp] = useState<FollowUpFilter>((cachedFilters.selectedFollowUp as FollowUpFilter) ?? 'ALL');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -1178,8 +1220,15 @@ export default function ChatPage() {
   const [deletingProposal, setDeletingProposal] = useState(false);
   const [savingInternalNote, setSavingInternalNote] = useState(false);
   const [internalNoteDraft, setInternalNoteDraft] = useState('');
+  const [savingFollowUp, setSavingFollowUp] = useState(false);
+  const [followUpDraftState, setFollowUpDraftState] = useState<{ conversationId: string | null; note: string }>({
+    conversationId: null,
+    note: '',
+  });
   const [handledQueryConversationId, setHandledQueryConversationId] = useState<string | null>(null);
   const [showConnectionBanner, setShowConnectionBanner] = useState(false);
+  const canManageQuickReplyAssets = canManageQuickReplies(user?.user_type);
+  const showQuickReplyCreationControls = shouldShowQuickReplyCreationControls(user?.user_type);
   useEffect(() => {
     quickRepliesApi.listQuickReplies().then(r => setAllQuickReplies(r.data ?? [])).catch(() => {});
   }, []);
@@ -1190,10 +1239,11 @@ export default function ChatPage() {
       searchQuery,
       selectedChannel,
       selectedTag,
+      selectedFollowUp,
       selectedStatus: 'ALL',
       selectedOwner: 'ALL',
     });
-  }, [cachedWorkspaceUserId, searchQuery, selectedChannel, selectedTag]);
+  }, [cachedWorkspaceUserId, searchQuery, selectedChannel, selectedFollowUp, selectedTag]);
 
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -1372,7 +1422,7 @@ export default function ChatPage() {
   }, [refreshConversationCustomerContext, refreshConversationLinkedArtifacts, refreshConversationTimeline]);
 
   const handleQuickReplyCreate = useCallback(async () => {
-    if (!quickReplyModal) return;
+    if (!quickReplyModal || !canManageQuickReplyAssets) return;
 
     try {
       setCreatingQuickReply(true);
@@ -1393,7 +1443,7 @@ export default function ChatPage() {
     } finally {
       setCreatingQuickReply(false);
     }
-  }, [quickReplyModal]);
+  }, [canManageQuickReplyAssets, quickReplyModal]);
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
   const {
@@ -1421,6 +1471,9 @@ export default function ChatPage() {
   } = useMessagesSessionContext();
   const canDeleteConversations = Boolean(user?.user_type?.can_delete_conversations);
   const canDeleteProposals = Boolean(user);
+  const followUpNoteDraft = followUpDraftState.conversationId === activeConversation?.id
+    ? followUpDraftState.note
+    : activeConversation?.follow_up_note ?? '';
 
   // Story 3.3 — sort by SLA risk: breached first, then by wait time desc
   const sortedConversations = [...conversations].sort((a, b) => {
@@ -1507,7 +1560,7 @@ export default function ChatPage() {
   ]);
 
   const availableChannels = Object.keys(CHANNEL_META) as ChannelType[];
-  const hasActiveFilters = Boolean(searchQuery.trim()) || selectedChannel !== 'ALL' || selectedTag !== 'ALL';
+  const hasActiveFilters = Boolean(searchQuery.trim()) || selectedChannel !== 'ALL' || selectedTag !== 'ALL' || selectedFollowUp !== 'ALL';
   const selectedTagLabel = selectedTag === 'ALL' ? null : TAG_META[selectedTag].label;
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const canUseAISuggestions = Boolean(activeConversation && lastMessage?.inbound);
@@ -1515,6 +1568,8 @@ export default function ChatPage() {
     ? 'No conversations yet'
     : selectedTag !== 'ALL'
       ? `No conversations match the ${selectedTagLabel} tag with the current filters`
+      : selectedFollowUp === 'FOLLOW_UP'
+        ? 'No conversations require follow-up with the current filters'
       : selectedChannel !== 'ALL'
         ? `No conversations match the ${getChannelMeta(selectedChannel).label} channel with the current filters`
         : 'No conversations match the current filters';
@@ -1527,8 +1582,9 @@ export default function ChatPage() {
     );
     const matchesChannel = selectedChannel === 'ALL' || c.channel.toUpperCase() === selectedChannel;
     const matchesTag = selectedTag === 'ALL' || c.tags.includes(selectedTag);
+    const matchesFollowUp = matchesFollowUpFilter(c, selectedFollowUp);
 
-    return matchesSearch && matchesChannel && matchesTag;
+    return matchesSearch && matchesChannel && matchesTag && matchesFollowUp;
   });
 
   const contextContact = customerContext?.contact ?? activeConversation?.contact;
@@ -1771,12 +1827,39 @@ export default function ChatPage() {
     }
   }, [activeConversation, updateConversation]);
 
+  const handleSaveFollowUp = useCallback(async () => {
+    if (!activeConversation) return;
+    try {
+      setSavingFollowUp(true);
+      await updateConversation(activeConversation.id, buildFollowUpPatch(followUpNoteDraft));
+      setContextActionHint({ message: 'Follow-up cue saved.' });
+    } catch (error) {
+      setContextActionHint({ message: error instanceof Error ? error.message : 'Failed to save follow-up cue.' });
+    } finally {
+      setSavingFollowUp(false);
+    }
+  }, [activeConversation, followUpNoteDraft, updateConversation]);
+
+  const handleClearFollowUp = useCallback(async () => {
+    if (!activeConversation) return;
+    try {
+      setSavingFollowUp(true);
+      await updateConversation(activeConversation.id, buildClearFollowUpPatch());
+      setFollowUpDraftState({ conversationId: activeConversation.id, note: '' });
+      setContextActionHint({ message: 'Follow-up cue cleared.' });
+    } catch (error) {
+      setContextActionHint({ message: error instanceof Error ? error.message : 'Failed to clear follow-up cue.' });
+    } finally {
+      setSavingFollowUp(false);
+    }
+  }, [activeConversation, updateConversation]);
+
   const handleMessageActionSelect = useCallback((action: MessageActionId, message: Message) => {
     setOpenMessageMenuId(null);
 
     const linkedProject = linkedProjectsByMessageId[message.id]?.[0];
 
-    if (action === 'create-quick-reply' && message.inbound) return;
+    if (action === 'create-quick-reply' && (message.inbound || !canManageQuickReplyAssets)) return;
 
     if (action === 'open-linked-card' && linkedProject) {
       router.push(`/projects?projectId=${linkedProject.id}`);
@@ -1811,7 +1894,7 @@ export default function ChatPage() {
     if (action === 'delete') {
       setDeleteMessageModal({ message });
     }
-  }, [linkedProjectsByMessageId, openCreateCardModalForMessage, openCreateTaskModalForMessage, router]);
+  }, [canManageQuickReplyAssets, linkedProjectsByMessageId, openCreateCardModalForMessage, openCreateTaskModalForMessage, router]);
 
   const {
     suggestions,
@@ -2192,6 +2275,17 @@ export default function ChatPage() {
                   expand_more
                 </span>
               </div>
+              <button
+                type="button"
+                onClick={() => setSelectedFollowUp((current) => current === 'FOLLOW_UP' ? 'ALL' : 'FOLLOW_UP')}
+                className="flex h-8 w-full items-center justify-center gap-1.5 rounded-full border px-3 text-[11px] font-semibold transition-colors"
+                style={selectedFollowUp === 'FOLLOW_UP'
+                  ? { background: '#fffbeb', color: '#92400e', borderColor: '#fde68a' }
+                  : { background: 'white', color: '#575f67', borderColor: '#e2e8f0' }}
+              >
+                <span className="material-symbols-outlined text-[14px]">flag</span>
+                Needs follow-up
+              </button>
             </div>
           </div>
           
@@ -2206,6 +2300,7 @@ export default function ChatPage() {
                       setSearchQuery('');
                       setSelectedChannel('ALL');
                       setSelectedTag('ALL');
+                      setSelectedFollowUp('ALL');
                     }}
                     className="mt-3 inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-800"
                   >
@@ -2277,6 +2372,7 @@ export default function ChatPage() {
                     <div className="flex items-center gap-1 mb-0.5 flex-wrap">
                       <ChannelBadge channel={conv.channel} compact />
                       <TagBadge tags={conv.tags} />
+                      <FollowUpBadge conversation={conv} compact />
                       {sla && (
                         <span className="inline-flex items-center gap-[1px] text-[9px] font-bold text-[#ef4444]">
                           <span className="material-symbols-outlined text-[10px]" style={{ fontVariationSettings: "'FILL' 1" }}>warning</span>
@@ -2346,6 +2442,7 @@ export default function ChatPage() {
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                       <ChannelBadge channel={activeConversation.channel} compact />
                       <TagBadge tags={activeConversation.tags} />
+                      <FollowUpBadge conversation={activeConversation} />
                       {(() => {
                         const wt = waitingTime(activeConversation.last_message_date, activeConversation.is_unread);
                         if (!wt?.slaBreached) return null;
@@ -2483,6 +2580,7 @@ export default function ChatPage() {
                               message={msg}
                               outbound={!msg.inbound}
                               linkedProject={primaryLinkedProject}
+                              canCreateQuickReply={canManageQuickReplyAssets}
                               onSelect={handleMessageActionSelect}
                             />
                           </div>
@@ -2605,7 +2703,7 @@ export default function ChatPage() {
                 {allQuickReplies.slice(0, 4).map(qr => (
                   <button
                     key={qr.id}
-                    onClick={() => setInput(qr.content)}
+                    onClick={() => setInput((current) => applyQuickReplyToDraft(current, qr.content))}
                     className="shrink-0 flex items-center gap-1 h-[26px] px-2.5 rounded-full border border-[#e2e8f0] bg-white text-[11px] font-semibold text-[#575f67] hover:border-[#a5b4fc] hover:bg-[#eef2ff] hover:text-[#4338ca] transition-colors whitespace-nowrap"
                   >
                     <span style={{ background: '#eef2ff', color: '#4338ca', border: '1px solid #c7d2fe', borderRadius: 4, padding: '0 4px', fontSize: 9, fontWeight: 700 }}>{qr.shortcut}</span>
@@ -2618,14 +2716,15 @@ export default function ChatPage() {
                     More
                   </button>
                 )}
-                {/* Add new quick reply */}
-                <button
-                  onClick={() => { setNewQRShortcut(''); setNewQRContent(''); setNewQRModal(true); }}
-                  title="Add quick reply"
-                  className="shrink-0 ml-auto flex items-center justify-center w-[26px] h-[26px] rounded-full border border-[#e2e8f0] bg-white text-[#94a3b8] hover:border-[#c7d2fe] hover:bg-[#eef2ff] hover:text-[#4338ca] transition-colors"
-                >
-                  <span className="material-symbols-outlined text-[15px]">add</span>
-                </button>
+                {showQuickReplyCreationControls && (
+                  <button
+                    onClick={() => { setNewQRShortcut(''); setNewQRContent(''); setNewQRModal(true); }}
+                    title="Add quick reply"
+                    className="shrink-0 ml-auto flex items-center justify-center w-[26px] h-[26px] rounded-full border border-[#e2e8f0] bg-white text-[#94a3b8] hover:border-[#c7d2fe] hover:bg-[#eef2ff] hover:text-[#4338ca] transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[15px]">add</span>
+                  </button>
+                )}
               </div>
 
               {/* Input Area */}
@@ -2693,7 +2792,7 @@ export default function ChatPage() {
                               className="w-full px-4 py-2.5 flex items-start gap-3 hover:bg-slate-50 text-left border-b border-slate-100 last:border-0 transition-colors"
                               onMouseDown={(e) => {
                                 e.preventDefault();
-                                setInput(qr.content);
+                                setInput((current) => applyQuickReplyToDraft(current, qr.content));
                                 qrClose();
                               }}
                             >
@@ -3560,6 +3659,45 @@ export default function ChatPage() {
                 {/* ── Details tab ── */}
                 {rightPanelTab === 'details' && (
                   <div className="p-4 space-y-5">
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="material-symbols-outlined text-[14px] text-amber-600">flag</span>
+                          <p className="text-[10px] font-bold text-[#575f67] uppercase" style={{ letterSpacing: '0.06em' }}>Next Action</p>
+                        </div>
+                        <FollowUpBadge conversation={activeConversation} compact />
+                      </div>
+                      <textarea
+                        value={followUpNoteDraft}
+                        onChange={(event) => setFollowUpDraftState({ conversationId: activeConversation.id, note: event.target.value })}
+                        placeholder="Add a short next action for this conversation."
+                        className="min-h-[76px] w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] text-slate-700 outline-none transition focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+                      />
+                      <div className="mt-2 flex items-center justify-between gap-3">
+                        <p className="text-[10px] text-slate-400">Shows as a follow-up cue in the inbox and conversation header.</p>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {activeConversation.needs_follow_up ? (
+                            <button
+                              type="button"
+                              onClick={handleClearFollowUp}
+                              disabled={savingFollowUp}
+                              className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              Clear
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={handleSaveFollowUp}
+                            disabled={savingFollowUp}
+                            className="inline-flex h-9 items-center justify-center rounded-xl bg-amber-600 px-3 text-[11px] font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-300"
+                          >
+                            {savingFollowUp ? 'Saving...' : activeConversation.needs_follow_up ? 'Update' : 'Mark'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
                     {/* Tag */}
                     <div>
                       <p className="text-[10px] font-bold text-[#575f67] uppercase mb-2" style={{ letterSpacing: '0.06em' }}>Conversation Tag</p>
@@ -3727,7 +3865,7 @@ export default function ChatPage() {
         />
       )}
 
-      {quickReplyModal && (
+      {quickReplyModal && canManageQuickReplyAssets && (
         <QuickReplyFromMessageModal
           state={quickReplyModal}
           saving={creatingQuickReply}
@@ -3756,7 +3894,7 @@ export default function ChatPage() {
       )}
 
       {/* New Quick Reply modal */}
-      {newQRModal && (
+      {newQRModal && showQuickReplyCreationControls && (
         <Modal title="New Quick Reply" onClose={() => setNewQRModal(false)} maxWidth="max-w-lg">
           <div className="space-y-5">
             <label className="flex flex-col gap-2">

@@ -55,7 +55,7 @@ async def list_quick_replies(
 async def create_quick_reply(
     data: QuickReplyCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("can_change_settings")),
 ) -> Dict[str, Any]:
     """Create a new quick reply shortcut."""
     # Normalize shortcut: ensure it starts with /
@@ -83,7 +83,7 @@ async def update_quick_reply(
     qr_id: UUID,
     data: QuickReplyUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("can_change_settings")),
 ) -> Dict[str, Any]:
     """Update a quick reply shortcut or content."""
     qr = db.query(QuickReply).filter(QuickReply.id == qr_id).first()
@@ -119,7 +119,7 @@ async def update_quick_reply(
 async def delete_quick_reply(
     qr_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("can_change_settings")),
 ) -> Dict[str, Any]:
     """Delete a quick reply."""
     qr = db.query(QuickReply).filter(QuickReply.id == qr_id).first()

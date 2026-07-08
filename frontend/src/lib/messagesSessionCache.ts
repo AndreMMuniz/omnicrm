@@ -21,6 +21,7 @@ export type MessagesWorkspaceFilters = {
   selectedStatus: string;
   selectedTag: string;
   selectedOwner: string;
+  selectedFollowUp: string;
 };
 
 const memoryCache = new Map<string, MessagesSessionCache>();
@@ -30,6 +31,7 @@ const DEFAULT_FILTERS: MessagesWorkspaceFilters = {
   selectedStatus: "ALL",
   selectedTag: "ALL",
   selectedOwner: "ALL",
+  selectedFollowUp: "ALL",
 };
 
 function buildKey(userId: string) {

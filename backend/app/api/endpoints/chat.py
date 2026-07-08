@@ -292,6 +292,7 @@ async def get_conversations(
     status: Optional[str] = None,
     tag: Optional[str] = None,
     assigned_user_id: Optional[UUID] = None,
+    needs_follow_up: Optional[bool] = None,
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """List conversations with optional filters. Eager-loads contact and assigned_user."""
@@ -313,6 +314,8 @@ async def get_conversations(
                 q = q.filter(Conversation.tag == normalized_tag[0])
     if assigned_user_id:
         q = q.filter(Conversation.assigned_user_id == assigned_user_id)
+    if needs_follow_up is not None:
+        q = q.filter(Conversation.needs_follow_up == needs_follow_up)
 
     total = q.order_by(None).with_entities(func.count(Conversation.id)).scalar() or 0
     conversations = q.order_by(Conversation.last_message_date.desc().nulls_last()).offset(skip).limit(limit).all()

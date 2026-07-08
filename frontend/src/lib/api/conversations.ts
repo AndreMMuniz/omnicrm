@@ -40,7 +40,7 @@ function toBackendConversationUpdate(data: UpdateConversationRequest) {
 
 export async function getConversations(
   limit = 100,
-  params?: { assigned_user_id?: string | null; status?: string | null }
+  params?: { assigned_user_id?: string | null; status?: string | null; needs_follow_up?: boolean | null }
 ): Promise<ApiResponse<Conversation[]>> {
   const query = new URLSearchParams({ limit: String(limit) });
   if (params?.assigned_user_id) {
@@ -48,6 +48,9 @@ export async function getConversations(
   }
   if (params?.status) {
     query.set("status", params.status);
+  }
+  if (params?.needs_follow_up !== undefined && params.needs_follow_up !== null) {
+    query.set("needs_follow_up", String(params.needs_follow_up));
   }
   const response = await apiGetList<Conversation>(`/chat/conversations?${query.toString()}`);
   return {
