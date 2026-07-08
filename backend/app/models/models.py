@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Enum, JSON, Integer, Numeric, Date, CheckConstraint, Float, false
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Enum, JSON, Integer, Numeric, Date, CheckConstraint, Float, Index, false
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -688,6 +688,44 @@ class LeadStatus(enum.Enum):
     DISQUALIFIED = "disqualified"
 
 
+class OutreachCampaignStatus(enum.Enum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    STOPPED = "stopped"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class OutreachCampaignSourceType(enum.Enum):
+    LEAD_SELECTION = "lead_selection"
+    LEAD_SEGMENT = "lead_segment"
+
+
+class OutreachCampaignLeadStatus(enum.Enum):
+    ACTIVE = "active"
+    SKIPPED = "skipped"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class OutreachSequenceStepStatus(enum.Enum):
+    DRAFT = "draft"
+    NEEDS_REVIEW = "needs_review"
+    APPROVED = "approved"
+    SENDING = "sending"
+    SENT = "sent"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    CANCELLED = "cancelled"
+
+
+class OutreachSequenceStepType(enum.Enum):
+    INITIAL_OUTREACH = "initial_outreach"
+    FOLLOW_UP = "follow_up"
+
+
 class LeadIdentity(Base):
     """Resolved commercial intake identity shared by repeated lead captures."""
     __tablename__ = "lead_identities"
@@ -707,6 +745,96 @@ class LeadIdentity(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     leads = relationship("Lead", back_populates="lead_identity")
+
+
+class OutreachCampaign(Base):
+    """Operator-controlled outbound campaign launch record."""
+    __tablename__ = "outreach_campaigns"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    objective = Column(Text, nullable=False)
+    channel = Column(String(50), nullable=False, index=True)
+    cadence = Column(JSON, nullable=False, default=dict)
+    status = Column(String(30), nullable=False, default=OutreachCampaignStatus.ACTIVE.value, index=True)
+    owner_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    source_type = Column(String(30), nullable=False, default=OutreachCampaignSourceType.LEAD_SELECTION.value)
+    source_filter = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    owner = relationship("User", foreign_keys=[owner_user_id])
+    created_by = relationship("User", foreign_keys=[created_by_user_id])
+    leads = relationship("OutreachCampaignLead", back_populates="campaign", cascade="all, delete-orphan")
+    steps = relationship(
+        "OutreachSequenceStep",
+        back_populates="campaign",
+        cascade="all, delete-orphan",
+        order_by="OutreachSequenceStep.position.asc()",
+    )
+
+
+class OutreachCampaignLead(Base):
+    """Lead membership snapshot for an outreach campaign."""
+    __tablename__ = "outreach_campaign_leads"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("outreach_campaigns.id", ondelete="CASCADE"), nullable=False, index=True)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True)
+    lead_identity_id = Column(UUID(as_uuid=True), ForeignKey("lead_identities.id", ondelete="SET NULL"), nullable=True, index=True)
+    status = Column(String(30), nullable=False, default=OutreachCampaignLeadStatus.ACTIVE.value, index=True)
+    skip_reason = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index(
+            "uq_outreach_campaign_leads_active_lead",
+            "lead_id",
+            unique=True,
+            postgresql_where=(status == OutreachCampaignLeadStatus.ACTIVE.value),
+            sqlite_where=(status == OutreachCampaignLeadStatus.ACTIVE.value),
+        ),
+    )
+
+    campaign = relationship("OutreachCampaign", back_populates="leads")
+    lead = relationship("Lead", back_populates="outreach_campaign_memberships", foreign_keys=[lead_id])
+    lead_identity = relationship("LeadIdentity", foreign_keys=[lead_identity_id])
+    steps = relationship("OutreachSequenceStep", back_populates="campaign_lead")
+
+
+class OutreachSequenceStep(Base):
+    """Reviewable channel-aware outreach step generated for a campaign lead."""
+    __tablename__ = "outreach_sequence_steps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("outreach_campaigns.id", ondelete="CASCADE"), nullable=False, index=True)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True)
+    campaign_lead_id = Column(UUID(as_uuid=True), ForeignKey("outreach_campaign_leads.id", ondelete="SET NULL"), nullable=True, index=True)
+    step_type = Column(String(50), nullable=False)
+    channel = Column(String(50), nullable=False, index=True)
+    position = Column(Integer, nullable=False)
+    due_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    status = Column(String(30), nullable=False, default=OutreachSequenceStepStatus.DRAFT.value, index=True)
+    generated_content = Column(Text, nullable=False, default="")
+    reviewed_content = Column(Text, nullable=True)
+    generation_metadata = Column(JSON, nullable=False, default=dict)
+    reviewed_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.id"), nullable=True, index=True)
+    idempotency_key = Column(String(255), nullable=True, unique=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    committed_at = Column(DateTime(timezone=True), nullable=True)
+    failure_reason = Column(Text, nullable=True)
+    skip_reason = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    campaign = relationship("OutreachCampaign", back_populates="steps")
+    lead = relationship("Lead", back_populates="outreach_sequence_steps", foreign_keys=[lead_id])
+    campaign_lead = relationship("OutreachCampaignLead", back_populates="steps")
+    reviewed_by = relationship("User", foreign_keys=[reviewed_by_id])
+    message = relationship("Message", foreign_keys=[message_id])
 
 
 class Lead(Base):
@@ -765,6 +893,8 @@ class Lead(Base):
 
     conversation = relationship("Conversation", foreign_keys=[conversation_id])
     lead_identity = relationship("LeadIdentity", back_populates="leads", foreign_keys=[lead_identity_id])
+    outreach_campaign_memberships = relationship("OutreachCampaignLead", back_populates="lead", foreign_keys="OutreachCampaignLead.lead_id")
+    outreach_sequence_steps = relationship("OutreachSequenceStep", back_populates="lead", foreign_keys="OutreachSequenceStep.lead_id")
 
 
 class LeadScoringConfig(Base):

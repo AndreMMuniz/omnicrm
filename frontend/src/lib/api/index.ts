@@ -15,3 +15,4 @@ export * as catalogApi from "./catalog";
 export * as proposalsApi from "./proposals";
 export * as clientsApi from "./clients";
 export * as leadsApi from "./leads";
+export * as campaignsApi from "./campaigns";

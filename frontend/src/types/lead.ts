@@ -19,6 +19,12 @@ export interface LeadDto {
   status: string;
   extraction_confidence: Record<string, unknown>;
   duplicate_risk: boolean;
+  lead_identity_id?: string | null;
+  identity_resolution_status?: string;
+  identity_confidence?: number | null;
+  identity_match_reasons?: string[];
+  identity_review_required?: boolean;
+  identity_candidates?: Record<string, unknown>[];
   role?: string | null;
   pain_points?: string[];
   qualification_notes?: string | null;
@@ -35,6 +41,11 @@ export interface LeadDto {
   score_rationale?: string | null;
   scoring_version?: string | null;
   scored_at?: string | null;
+  active_campaign_id?: string | null;
+  active_campaign_name?: string | null;
+  active_campaign_channel?: string | null;
+  active_campaign_status?: string | null;
+  active_sequence_active: boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }

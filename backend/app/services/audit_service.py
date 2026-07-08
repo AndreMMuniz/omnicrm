@@ -12,6 +12,7 @@ def log_action(
     resource_id: Optional[str] = None,
     details: Optional[dict] = None,
     ip_address: Optional[str] = None,
+    commit: bool = True,
 ) -> AuditLog:
     # Ensure details is JSON serializable (convert UUIDs, datetimes, etc. to strings)
     if details:
@@ -27,6 +28,7 @@ def log_action(
         ip_address=ip_address,
     )
     db.add(entry)
-    db.commit()
-    db.refresh(entry)
+    if commit:
+        db.commit()
+        db.refresh(entry)
     return entry

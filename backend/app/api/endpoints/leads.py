@@ -9,15 +9,18 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.auth import get_current_user, require_permission
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.models.models import Conversation, Lead, LeadStatus, User
+from app.models.models import Conversation, Lead, LeadStatus, OutreachCampaign, OutreachCampaignLead, User
 from app.schemas.common import create_paginated_response, create_response
+from app.schemas.outreach import OutreachGroundingRequest
 from app.services.lead_enrichment_service import LeadEnrichmentService
 from app.services.lead_scoring_service import LeadScoringService
+from app.services.outreach_grounding_service import OutreachGroundingService
 
 router = APIRouter()
 
@@ -43,7 +46,37 @@ def _mask_phone(phone: Optional[str]) -> Optional[str]:
     return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
 
 
-def _serialize_lead(lead: Lead, reveal: bool = False) -> Dict[str, Any]:
+def _active_campaign_for_lead(db: Session, lead_id: UUID) -> Optional[Dict[str, Any]]:
+    try:
+        row = (
+            db.query(OutreachCampaignLead, OutreachCampaign)
+            .join(OutreachCampaign, OutreachCampaign.id == OutreachCampaignLead.campaign_id)
+            .filter(
+                OutreachCampaignLead.lead_id == lead_id,
+                OutreachCampaignLead.status == "active",
+                OutreachCampaign.status.in_(["active", "draft", "paused", "failed"]),
+            )
+            .order_by(OutreachCampaignLead.created_at.desc())
+            .first()
+        )
+    except SQLAlchemyError:
+        db.rollback()
+        return None
+    if not row:
+        return None
+    membership, campaign = row
+    objective = " ".join((campaign.objective or "").split())
+    return {
+        "active_campaign_id": str(campaign.id),
+        "active_campaign_name": objective[:80] if objective else None,
+        "active_campaign_channel": campaign.channel,
+        "active_campaign_status": campaign.status,
+        "active_sequence_active": True,
+    }
+
+
+def _serialize_lead(lead: Lead, reveal: bool = False, db: Optional[Session] = None) -> Dict[str, Any]:
+    active_campaign = _active_campaign_for_lead(db, lead.id) if db else None
     return {
         "id": str(lead.id),
         "conversation_id": str(lead.conversation_id) if lead.conversation_id else None,
@@ -80,6 +113,11 @@ def _serialize_lead(lead: Lead, reveal: bool = False) -> Dict[str, Any]:
         "score_rationale": lead.score_rationale,
         "scoring_version": lead.scoring_version,
         "scored_at": lead.scored_at.isoformat() if lead.scored_at else None,
+        "active_campaign_id": active_campaign["active_campaign_id"] if active_campaign else None,
+        "active_campaign_name": active_campaign["active_campaign_name"] if active_campaign else None,
+        "active_campaign_channel": active_campaign["active_campaign_channel"] if active_campaign else None,
+        "active_campaign_status": active_campaign["active_campaign_status"] if active_campaign else None,
+        "active_sequence_active": bool(active_campaign),
         "created_at": lead.created_at.isoformat() if lead.created_at else None,
         "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
     }
@@ -95,6 +133,7 @@ async def list_leads(
     limit: int = Query(20, ge=1, le=100),
     status: Optional[str] = Query(None),
     channel: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """List leads with pagination and optional filters."""
@@ -114,7 +153,7 @@ async def list_leads(
     leads = q.offset(skip).limit(limit).all()
 
     return create_paginated_response(
-        data=[_serialize_lead(l) for l in leads],
+        data=[_serialize_lead(l, db=db) for l in leads],
         total=total,
         page=(skip // limit) + 1,
         page_size=limit,
@@ -154,6 +193,7 @@ async def get_lead(
     request: Request,
     lead_id: UUID,
     reveal: bool = Query(False, description="Reveal masked PII fields"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Get a single lead. PII is masked by default; pass ?reveal=true to unmask."""
@@ -166,13 +206,37 @@ async def get_lead(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    data = _serialize_lead(lead, reveal=reveal)
+    data = _serialize_lead(lead, reveal=reveal, db=db)
 
     # Attach conversation message count if available
     if lead.conversation:
         data["message_count"] = len(lead.conversation.messages)
 
     return create_response(data)
+
+
+@router.post("/{lead_id}/outreach-grounding")
+@limiter.limit("30/minute")
+async def build_lead_outreach_grounding(
+    request: Request,
+    lead_id: UUID,
+    body: OutreachGroundingRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Build source-attributed outreach grounding inputs for a lead."""
+    try:
+        result = OutreachGroundingService(db).build_for_lead(
+            actor=current_user,
+            lead_id=lead_id,
+            channel=body.channel,
+            scope=body.scope,
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return create_response(result)
 
 
 @router.post("/{lead_id}/score")
@@ -192,7 +256,7 @@ async def score_lead(
         raise HTTPException(status_code=400, detail=str(exc))
 
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
-    return create_response(_serialize_lead(lead))
+    return create_response(_serialize_lead(lead, db=db))
 
 
 @router.patch("/{lead_id}/status")
@@ -220,7 +284,7 @@ async def update_lead_status(
 
     db.commit()
     db.refresh(lead)
-    return create_response(_serialize_lead(lead))
+    return create_response(_serialize_lead(lead, db=db))
 
 
 @router.post("/{lead_id}/enrich")
@@ -237,4 +301,4 @@ async def enrich_lead(
     except LookupError:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    return create_response(_serialize_lead(lead))
+    return create_response(_serialize_lead(lead, db=db))

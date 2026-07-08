@@ -9,7 +9,7 @@ from app.api.api import api_router
 from app.core.auth import get_current_user
 from app.core.database import Base
 from app.core.database import get_db
-from app.models.models import Client, Contact, Conversation, DefaultRole, Lead, LeadIdentity, LeadScoringConfig, Message, Project, ProjectStage, User, UserType
+from app.models.models import CatalogCategory, CatalogItem, Client, Contact, Conversation, DefaultRole, Lead, LeadIdentity, LeadScoringConfig, Message, OutreachCampaign, OutreachCampaignLead, Project, ProjectStage, User, UserType
 
 
 engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -32,10 +32,14 @@ def db():
         Contact.__table__,
         ProjectStage.__table__,
         Project.__table__,
+        CatalogCategory.__table__,
+        CatalogItem.__table__,
         Conversation.__table__,
         Message.__table__,
         LeadIdentity.__table__,
         Lead.__table__,
+        OutreachCampaign.__table__,
+        OutreachCampaignLead.__table__,
         LeadScoringConfig.__table__,
     ]
     with engine.begin() as connection:
@@ -125,7 +129,8 @@ def test_lead_detail_includes_scoring_fields_and_preserves_masking(db):
     db.add(lead)
     db.commit()
 
-    client = _make_client(db)
+    current_user = _seed_user(db)
+    client = _make_client(db, current_user)
     response = client.get(f"/api/v1/leads/{lead.id}")
 
     assert response.status_code == 200
@@ -143,6 +148,8 @@ def test_lead_detail_includes_scoring_fields_and_preserves_masking(db):
     assert data["identity_review_required"] is False
     assert "email_hash" not in data
     assert "phone_hash" not in data
+    assert data["active_sequence_active"] is False
+    assert data["active_campaign_id"] is None
 
 
 def test_score_endpoint_calculates_and_persists_result(db):
@@ -237,3 +244,107 @@ def test_scoring_config_update_requires_settings_permission(db):
 
     assert response.status_code == 403
     assert "can_change_settings" in response.json()["detail"]
+
+
+def test_lead_detail_includes_active_campaign_summary(db):
+    user = _seed_user(db)
+    lead = Lead(
+        name="Marina Costa",
+        email="marina@example.com",
+        company="Acme",
+        source_channel="whatsapp",
+    )
+    db.add(lead)
+    db.flush()
+    campaign = OutreachCampaign(
+        objective="Re-engage qualified leads",
+        channel="whatsapp",
+        cadence={"timezone": "America/Sao_Paulo"},
+        status="active",
+        owner_user_id=user.id,
+        created_by_user_id=user.id,
+        source_type="lead_selection",
+    )
+    db.add(campaign)
+    db.flush()
+    db.add(
+        OutreachCampaignLead(
+            campaign_id=campaign.id,
+            lead_id=lead.id,
+            status="active",
+        )
+    )
+    db.commit()
+
+    client = _make_client(db, user)
+    response = client.get(f"/api/v1/leads/{lead.id}")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["active_sequence_active"] is True
+    assert data["active_campaign_id"] == str(campaign.id)
+    assert data["active_campaign_name"] == "Re-engage qualified leads"
+    assert data["active_campaign_channel"] == "whatsapp"
+    assert data["active_campaign_status"] == "active"
+
+
+def test_lead_outreach_grounding_preview_returns_attributed_safe_inputs(db):
+    current_user = _seed_user(db)
+    contact = Contact(name="Marina Costa")
+    db.add(contact)
+    db.flush()
+    conversation = Conversation(contact_id=contact.id, assigned_user_id=current_user.id)
+    db.add(conversation)
+    db.flush()
+    db.add_all(
+        [
+            Message(
+                conversation_id=conversation.id,
+                content="We need better proposal follow-up.",
+                inbound=True,
+                is_internal=False,
+                conversation_sequence=1,
+            ),
+            Message(
+                conversation_id=conversation.id,
+                content="Internal: do not mention discount pressure.",
+                inbound=False,
+                is_internal=True,
+                conversation_sequence=2,
+            ),
+        ]
+    )
+    lead = Lead(
+        conversation_id=conversation.id,
+        name="Marina Costa",
+        email="marina@example.com",
+        phone="+55 11 99999-1234",
+        company="Acme",
+        source_channel="whatsapp",
+        source_facts={"lead": {"name": "Marina Costa", "company": "Acme"}},
+        ai_inferences={"pain_points": [{"value": "proposal follow-up clarity", "confidence": 0.81}]},
+        enrichment_status="completed",
+        score=82,
+        qualification_label="hot",
+        score_confidence=0.79,
+        score_rationale="Strong commercial signal.",
+    )
+    db.add(lead)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.post(f"/api/v1/leads/{lead.id}/outreach-grounding", json={"channel": "whatsapp"})
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["entity_type"] == "lead"
+    assert data["entity_id"] == str(lead.id)
+    assert data["fallback_mode"] is False
+    assert any(item["key"] == "lead.company" for item in data["facts"])
+    assert any(item["key"] == "lead.pain_points" for item in data["inferences"])
+    rendered = str(data)
+    assert "email_hash" not in rendered
+    assert "phone_hash" not in rendered
+    assert "marina@example.com" not in rendered
+    assert "99999" not in rendered
+    assert "discount pressure" not in rendered
