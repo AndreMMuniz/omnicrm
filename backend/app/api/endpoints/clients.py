@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, aliased, joinedload
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.models.models import Client, Contact, Conversation, User
+from app.models.models import Client, Contact, Conversation, Lead, User
 from app.schemas.chat import CustomerTimelineResponse
 from app.schemas.client import (
     ClientContactListResponse,
@@ -18,6 +18,7 @@ from app.schemas.client import (
     ClientResponse,
     ClientUpdate,
     PeopleDetailResponse,
+    PeopleLeadEnrichmentResponse,
     PeopleLinkedCompanyResponse,
     PeopleListResponse,
     PersonConversationSummaryResponse,
@@ -281,6 +282,16 @@ async def get_people_context(
         projects_count = db.query(func.count(Project.id)).filter(Project.client_id == contact.client.id).scalar() or 0
         proposals_count = db.query(func.count(Proposal.id)).filter(Proposal.client_id == contact.client.id).scalar() or 0
 
+    conversation_ids = [conversation.id for conversation in conversations]
+    latest_lead = None
+    if conversation_ids:
+        latest_lead = (
+            db.query(Lead)
+            .filter(Lead.conversation_id.in_(conversation_ids))
+            .order_by(Lead.updated_at.desc(), Lead.created_at.desc())
+            .first()
+        )
+
     return create_response(
         PeopleDetailResponse(
             id=contact.id,
@@ -306,6 +317,22 @@ async def get_people_context(
             ],
             projects_count=int(projects_count),
             proposals_count=int(proposals_count),
+            lead_enrichment=(
+                PeopleLeadEnrichmentResponse(
+                    id=latest_lead.id,
+                    role=latest_lead.role,
+                    company=latest_lead.company,
+                    pain_points=latest_lead.pain_points or [],
+                    qualification_notes=latest_lead.qualification_notes,
+                    source_facts=latest_lead.source_facts or {},
+                    ai_inferences=latest_lead.ai_inferences or {},
+                    enrichment_status=latest_lead.enrichment_status or "pending",
+                    enrichment_error=latest_lead.enrichment_error,
+                    enriched_at=latest_lead.enriched_at,
+                )
+                if latest_lead
+                else None
+            ),
         )
     )
 

@@ -145,7 +145,7 @@ def _check_duplicate(state: ConversationLeadState, repo: LeadRepositoryBase) -> 
 
     return {
         "existing_lead_id": existing,
-        "should_create_lead": existing is None,
+        "should_create_lead": True,
     }
 
 

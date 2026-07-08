@@ -79,9 +79,8 @@ function ResetPasswordPageInner() {
         <div className="absolute inset-0 opacity-10"
           style={{ backgroundImage: "radial-gradient(circle at 20% 80%, #fff 1px, transparent 1px), radial-gradient(circle at 80% 20%, #fff 1px, transparent 1px)", backgroundSize: "40px 40px" }} />
 
-        <div className="relative flex items-center gap-3">
-          <img src="/icon.svg" alt="omnicrm.chat" className="w-10 h-10 rounded-xl" />
-          <span className="font-bold text-lg text-white tracking-tight">omnicrm.chat</span>
+        <div className="relative flex items-center">
+          <img src="/brand/omnicrm-logo.png" alt="omnicrm.chat" className="h-12 w-[180px] rounded-2xl object-cover object-center shadow-lg" />
         </div>
 
         <div className="relative">
@@ -104,9 +103,8 @@ function ResetPasswordPageInner() {
       <div className="flex-1 flex items-center justify-center px-8">
         <div className="w-full max-w-[380px]">
           {/* Mobile logo */}
-          <div className="lg:hidden flex items-center gap-2 mb-8">
-            <img src="/icon.svg" alt="omnicrm.chat" className="w-8 h-8 rounded-lg" />
-            <span className="font-bold text-slate-900">omnicrm.chat</span>
+          <div className="lg:hidden flex items-center mb-8">
+            <img src="/brand/omnicrm-logo.png" alt="omnicrm.chat" className="h-11 w-[165px] rounded-xl object-cover object-center shadow-sm" />
           </div>
 
           <h2 className="text-2xl font-bold text-slate-900 mb-1">Reset password</h2>

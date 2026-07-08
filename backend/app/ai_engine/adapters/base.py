@@ -39,3 +39,7 @@ class LeadRepositoryBase(Protocol):
     ) -> str:
         """Persist a new lead. Returns the new lead_id (str UUID)."""
         ...
+
+    def resolve_lead_identity(self, lead_id: str) -> Optional[str]:
+        """Attach a persisted lead to a resolved identity when possible."""
+        ...

@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ClientBase(BaseModel):
@@ -134,6 +134,21 @@ class PersonConversationSummaryResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PeopleLeadEnrichmentResponse(BaseModel):
+    id: UUID
+    role: Optional[str] = None
+    company: Optional[str] = None
+    pain_points: list[str] = Field(default_factory=list)
+    qualification_notes: Optional[str] = None
+    source_facts: dict = Field(default_factory=dict)
+    ai_inferences: dict = Field(default_factory=dict)
+    enrichment_status: str = "pending"
+    enrichment_error: Optional[str] = None
+    enriched_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
 class PeopleDetailResponse(BaseModel):
     id: UUID
     name: Optional[str] = None
@@ -148,5 +163,6 @@ class PeopleDetailResponse(BaseModel):
     related_conversations: list[PersonConversationSummaryResponse]
     projects_count: int = 0
     proposals_count: int = 0
+    lead_enrichment: Optional[PeopleLeadEnrichmentResponse] = None
 
     model_config = {"from_attributes": True}

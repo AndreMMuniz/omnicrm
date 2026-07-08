@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.api import api_router
 from app.core.auth import get_current_user
 from app.core.database import Base, get_db
-from app.models.models import Client, Contact, Conversation, DefaultRole, Project, Proposal, User, UserType
+from app.models.models import Client, Contact, Conversation, DefaultRole, Lead, LeadIdentity, Project, Proposal, User, UserType
 
 
 TEST_DB_URL = "sqlite://"
@@ -35,6 +35,8 @@ def db():
         Client.__table__,
         Contact.__table__,
         Conversation.__table__,
+        LeadIdentity.__table__,
+        Lead.__table__,
         Project.__table__,
         Proposal.__table__,
     ]
@@ -280,6 +282,63 @@ def test_get_people_context_returns_linked_company_and_related_counts(db):
     assert payload["linked_company"]["id"] == str(company.id)
     assert payload["conversation_count"] == 1
     assert payload["related_conversations"][0]["id"] == str(conversation.id)
+
+
+def test_get_people_context_returns_related_lead_enrichment(db):
+    current_user = _seed_user(db, "current@example.com", "Current User")
+    company = Client(
+        name="Acme Brasil",
+        company_name="Acme",
+        client_type="company",
+        country="BR",
+        currency="BRL",
+        created_by_user_id=current_user.id,
+    )
+    db.add(company)
+    db.flush()
+
+    contact = Contact(
+        name="Marina Costa",
+        email="marina@example.com",
+        channel_identifier="@marina",
+        client_id=company.id,
+    )
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        channel="WHATSAPP",
+        status="OPEN",
+        last_message="Need proposal details",
+    )
+    db.add(conversation)
+    db.flush()
+
+    lead = Lead(
+        conversation_id=conversation.id,
+        name="Marina Costa",
+        company="Acme",
+        source_channel="whatsapp",
+        role="Operations Manager",
+        pain_points=["fragmented support queue"],
+        qualification_notes="Evaluating support operations improvements.",
+        source_facts={"lead": {"company": "Acme"}},
+        ai_inferences={"role": {"value": "Operations Manager", "confidence": 0.76}},
+        enrichment_status="completed",
+    )
+    db.add(lead)
+    db.commit()
+
+    client = _make_client(db, current_user)
+    response = client.get(f"/api/v1/admin/contacts/{contact.id}/people-context")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["lead_enrichment"]["id"] == str(lead.id)
+    assert payload["lead_enrichment"]["role"] == "Operations Manager"
+    assert payload["lead_enrichment"]["pain_points"] == ["fragmented support queue"]
+    assert payload["lead_enrichment"]["ai_inferences"]["role"]["value"] == "Operations Manager"
 
 
 def test_get_client_returns_owner_and_creator_metadata(db):

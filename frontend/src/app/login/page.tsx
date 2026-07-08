@@ -133,13 +133,7 @@ export default function LoginPage() {
         <div className="relative flex w-full flex-col gap-6 px-14 py-10 text-white">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <img src="/icon.svg" alt="omnicrm.chat" className="h-10 w-10 rounded-xl" />
-              <div>
-                <div className="text-[17px] font-bold tracking-[-0.02em]">omnicrm.chat</div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/70">
-                  customer operations workspace
-                </div>
-              </div>
+              <img src="/brand/omnicrm-logo.png" alt="omnicrm.chat" className="h-12 w-[180px] rounded-2xl object-cover object-center shadow-lg" />
             </div>
 
             <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] font-semibold tracking-[0.03em] text-white/90">
@@ -295,9 +289,8 @@ export default function LoginPage() {
         </div>
 
         <div className="w-full max-w-[420px]">
-          <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <img src="/icon.svg" alt="omnicrm.chat" className="h-10 w-10 rounded-xl" />
-            <span className="text-lg font-bold tracking-[-0.02em] text-slate-900">omnicrm.chat</span>
+          <div className="mb-8 flex items-center lg:hidden">
+            <img src="/brand/omnicrm-logo.png" alt="omnicrm.chat" className="h-12 w-[180px] rounded-2xl object-cover object-center shadow-sm" />
           </div>
 
           <div className="rounded-[28px] border border-white/70 bg-white/92 p-7 shadow-[0_28px_60px_-24px_rgba(15,23,42,0.22)] backdrop-blur sm:p-8">

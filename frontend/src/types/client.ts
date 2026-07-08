@@ -90,6 +90,18 @@ export interface PeopleDetailDto {
   related_conversations: PersonConversationSummaryDto[];
   projects_count: number;
   proposals_count: number;
+  lead_enrichment?: {
+    id: string;
+    role?: string | null;
+    company?: string | null;
+    pain_points: string[];
+    qualification_notes?: string | null;
+    source_facts: Record<string, unknown>;
+    ai_inferences: Record<string, unknown>;
+    enrichment_status: string;
+    enrichment_error?: string | null;
+    enriched_at?: string | null;
+  } | null;
 }
 
 export interface ClientCreateRequest {

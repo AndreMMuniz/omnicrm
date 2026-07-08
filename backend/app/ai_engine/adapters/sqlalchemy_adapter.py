@@ -3,17 +3,22 @@
 This is the only file inside ai_engine/ that imports SQLAlchemy or ORM models.
 """
 
+import logging
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from app.core.hashing import hash_identifier
 from app.models.models import Lead, LeadStatus, Message
+from app.services.lead_enrichment_service import LeadEnrichmentService
+from app.services.lead_identity_resolution_service import LeadIdentityResolutionService
 from app.ai_engine.schemas.lead_state import (
     ConversationMessage,
     ExtractedEntities,
     ExtractionConfidence,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SQLAlchemyLeadAdapter:
@@ -86,4 +91,18 @@ class SQLAlchemyLeadAdapter:
         self._db.add(lead)
         self._db.flush()   # populate lead.id without committing — caller owns the transaction
         self._db.commit()
+        self.resolve_lead_identity(str(lead.id))
+        try:
+            LeadEnrichmentService(self._db).enrich_lead(lead.id)
+        except Exception:
+            # Lead creation must remain successful even when enrichment fails.
+            logger.exception("Lead enrichment failed after lead creation for lead %s", lead.id)
         return str(lead.id)
+
+    def resolve_lead_identity(self, lead_id: str) -> Optional[str]:
+        try:
+            result = LeadIdentityResolutionService(self._db).resolve_for_lead(lead_id)
+            return result.lead_identity_id
+        except Exception:
+            # Identity resolution must not break lead creation.
+            return None

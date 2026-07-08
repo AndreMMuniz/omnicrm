@@ -6,9 +6,9 @@ export const metadata: Metadata = {
   title: "omnicrm.chat",
   description: "Multi-channel customer support platform",
   icons: {
-    icon: "/icon.svg",
-    shortcut: "/icon.svg",
-    apple: "/icon.svg",
+    icon: "/brand/omnicrm-logo.png",
+    shortcut: "/brand/omnicrm-logo.png",
+    apple: "/brand/omnicrm-logo.png",
   },
 };
 

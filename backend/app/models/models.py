@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Enum, JSON, Integer, Numeric, Date, CheckConstraint, false
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Enum, JSON, Integer, Numeric, Date, CheckConstraint, Float, false
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -688,12 +688,34 @@ class LeadStatus(enum.Enum):
     DISQUALIFIED = "disqualified"
 
 
+class LeadIdentity(Base):
+    """Resolved commercial intake identity shared by repeated lead captures."""
+    __tablename__ = "lead_identities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    display_name = Column(String(512), nullable=True)
+    company = Column(String(512), nullable=True)
+    email_hash = Column(String(64), nullable=True, index=True)
+    phone_hash = Column(String(64), nullable=True, index=True)
+    normalized_name = Column(String(512), nullable=True, index=True)
+    normalized_company = Column(String(512), nullable=True, index=True)
+    resolution_status = Column(String(30), nullable=False, default="resolved")
+    confidence = Column(Float, nullable=False, default=0.0)
+    match_reasons = Column(JSON, nullable=False, default=list)
+    review_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    leads = relationship("Lead", back_populates="lead_identity")
+
+
 class Lead(Base):
     """AI-detected lead from a closed conversation."""
     __tablename__ = "leads"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True)
+    lead_identity_id = Column(UUID(as_uuid=True), ForeignKey("lead_identities.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Extracted entities — plaintext name, encrypted email/phone
     name = Column(String(512), nullable=True)
@@ -709,6 +731,20 @@ class Lead(Base):
     extraction_confidence = Column(JSON, nullable=False, default=dict)
     extraction_error = Column(Boolean, nullable=False, default=False)
     duplicate_risk = Column(Boolean, nullable=False, default=False)
+    identity_resolution_status = Column(String(30), nullable=False, default="unresolved")
+    identity_confidence = Column(Float, nullable=True)
+    identity_match_reasons = Column(JSON, nullable=False, default=list)
+    identity_review_required = Column(Boolean, nullable=False, default=False)
+    identity_candidates = Column(JSON, nullable=False, default=list)
+
+    role = Column(String(255), nullable=True)
+    pain_points = Column(JSON, nullable=False, default=list)
+    qualification_notes = Column(Text, nullable=True)
+    source_facts = Column(JSON, nullable=False, default=dict)
+    ai_inferences = Column(JSON, nullable=False, default=dict)
+    enrichment_status = Column(String(20), nullable=False, default="pending")
+    enrichment_error = Column(Text, nullable=True)
+    enriched_at = Column(DateTime(timezone=True), nullable=True)
 
     status = Column(
         Enum(LeadStatus, values_callable=lambda obj: [e.value for e in obj], name="leadstatus"),
@@ -716,10 +752,31 @@ class Lead(Base):
         default=LeadStatus.NEW,
     )
 
+    score = Column(Integer, nullable=True)
+    qualification_label = Column(String(50), nullable=True)
+    score_confidence = Column(Float, nullable=True)
+    score_breakdown = Column(JSON, nullable=False, default=list)
+    score_rationale = Column(Text, nullable=True)
+    scoring_version = Column(String(100), nullable=True)
+    scored_at = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     conversation = relationship("Conversation", foreign_keys=[conversation_id])
+    lead_identity = relationship("LeadIdentity", back_populates="leads", foreign_keys=[lead_identity_id])
+
+
+class LeadScoringConfig(Base):
+    """Active scoring policy used by the deterministic lead scoring service."""
+    __tablename__ = "lead_scoring_configs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    version = Column(String(100), nullable=False, unique=True)
+    config = Column(JSON, nullable=False, default=dict)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class ProposalStatusHistory(Base):

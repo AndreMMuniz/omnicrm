@@ -289,6 +289,39 @@ export function PeopleWorkspace() {
                   ) : null}
                 </div>
 
+                {selectedPerson.lead_enrichment ? (
+                  <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-indigo-500">Lead intelligence</p>
+                        <p className="mt-2 text-sm font-semibold text-slate-900">
+                          {selectedPerson.lead_enrichment.role || "Role not inferred yet"}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Status: {selectedPerson.lead_enrichment.enrichment_status}
+                        </p>
+                      </div>
+                      {selectedPerson.lead_enrichment.enriched_at ? (
+                        <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500">
+                          {formatDateLabel(selectedPerson.lead_enrichment.enriched_at)}
+                        </span>
+                      ) : null}
+                    </div>
+                    {selectedPerson.lead_enrichment.qualification_notes ? (
+                      <p className="mt-3 text-sm leading-6 text-slate-700">{selectedPerson.lead_enrichment.qualification_notes}</p>
+                    ) : null}
+                    {selectedPerson.lead_enrichment.pain_points.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {selectedPerson.lead_enrichment.pain_points.map((painPoint) => (
+                          <span key={painPoint} className="rounded-full border border-indigo-100 bg-white px-3 py-1.5 text-xs text-slate-600">
+                            {painPoint}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
