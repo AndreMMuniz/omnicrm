@@ -9,7 +9,6 @@ export function buildFollowUpPatch(note: string): UpdateConversationRequest {
   return {
     needs_follow_up: true,
     follow_up_note: trimmedNote || null,
-    follow_up_at: null,
   };
 }
 

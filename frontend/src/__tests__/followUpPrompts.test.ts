@@ -34,7 +34,6 @@ describe("follow-up prompts", () => {
     expect(buildFollowUpPatch("  Confirm proposal acceptance.  ")).toEqual({
       needs_follow_up: true,
       follow_up_note: "Confirm proposal acceptance.",
-      follow_up_at: null,
     });
   });
 
@@ -42,7 +41,6 @@ describe("follow-up prompts", () => {
     expect(buildFollowUpPatch("   ")).toEqual({
       needs_follow_up: true,
       follow_up_note: null,
-      follow_up_at: null,
     });
   });
 

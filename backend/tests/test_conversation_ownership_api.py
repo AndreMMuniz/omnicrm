@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from datetime import datetime, timezone
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
@@ -443,6 +444,47 @@ def test_update_conversation_clears_follow_up_state(db, monkeypatch):
             "follow_up_note": None,
             "follow_up_at": None,
         },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["needs_follow_up"] is False
+    assert payload["follow_up_note"] is None
+    assert payload["follow_up_at"] is None
+
+    db.refresh(conversation)
+    assert conversation.needs_follow_up is False
+    assert conversation.follow_up_note is None
+    assert conversation.follow_up_at is None
+
+
+def test_update_conversation_clears_follow_up_details_with_partial_patch(db, monkeypatch):
+    current_user = _seed_user(db, "agent@example.com", "Agent User")
+    contact = Contact(name="Client")
+    db.add(contact)
+    db.flush()
+
+    conversation = Conversation(
+        contact_id=contact.id,
+        assigned_user_id=current_user.id,
+        channel=ChannelType.EMAIL,
+        status=ConversationStatus.OPEN,
+        needs_follow_up=True,
+        follow_up_note="Call back after contract review.",
+        follow_up_at=datetime.now(timezone.utc),
+    )
+    db.add(conversation)
+    db.commit()
+
+    async def fake_broadcast_global(event_type, data):
+        return None
+
+    monkeypatch.setattr(manager, "broadcast_global", fake_broadcast_global)
+
+    client = _make_client(db, current_user)
+    response = client.patch(
+        f"/api/v1/chat/conversations/{conversation.id}",
+        json={"needs_follow_up": False},
     )
 
     assert response.status_code == 200

@@ -36,6 +36,7 @@ import type {
 import type { ClientListDto } from '@/types/client';
 import type { ProjectDto, ProjectPriority, ProjectStage, ProjectStageKey, ProjectTaskDto, ProjectTaskStatus } from '@/types/project';
 import AudioMessage from '@/components/AudioMessage';
+import { FollowUpActionPanel, FollowUpBadge } from '@/components/messages/FollowUpPromptControls';
 import { useState as useLocalState } from 'react';
 import { useMessagesSessionContext } from '@/contexts/MessagesSessionContext';
 import { getMessagesWorkspaceFilters, saveMessagesWorkspaceFilters } from '@/lib/messagesSessionCache';
@@ -47,7 +48,6 @@ import {
 import {
   buildClearFollowUpPatch,
   buildFollowUpPatch,
-  getFollowUpCueLabel,
   matchesFollowUpFilter,
   type FollowUpFilter,
 } from '@/lib/followUpPrompts';
@@ -245,33 +245,6 @@ function ConversationStatusBadge({
   return (
     <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold", meta.badgeClassName, className)}>
       {status === 'RESOLVED' ? '✓ ' : ''}{meta.shortLabel}
-    </span>
-  );
-}
-
-function FollowUpBadge({
-  conversation,
-  compact = false,
-  className,
-}: {
-  conversation: Pick<Conversation, 'needs_follow_up' | 'follow_up_note' | 'follow_up_at'>;
-  compact?: boolean;
-  className?: string;
-}) {
-  const label = getFollowUpCueLabel(conversation);
-  if (!label) return null;
-
-  return (
-    <span
-      className={cn(
-        "inline-flex max-w-full items-center gap-1 rounded-full border border-amber-200 bg-amber-50 font-semibold text-amber-800",
-        compact ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-[11px]",
-        className
-      )}
-      title={label}
-    >
-      <span className={cn("material-symbols-outlined", compact ? "text-[12px]" : "text-[14px]")}>flag</span>
-      <span className="truncate">{compact ? "Follow-up" : label}</span>
     </span>
   );
 }
@@ -1474,6 +1447,12 @@ export default function ChatPage() {
   const followUpNoteDraft = followUpDraftState.conversationId === activeConversation?.id
     ? followUpDraftState.note
     : activeConversation?.follow_up_note ?? '';
+
+  useEffect(() => {
+    void fetchConversations({
+      needs_follow_up: selectedFollowUp === 'FOLLOW_UP' ? true : null,
+    });
+  }, [fetchConversations, selectedFollowUp]);
 
   // Story 3.3 — sort by SLA risk: breached first, then by wait time desc
   const sortedConversations = [...conversations].sort((a, b) => {
@@ -3659,44 +3638,14 @@ export default function ChatPage() {
                 {/* ── Details tab ── */}
                 {rightPanelTab === 'details' && (
                   <div className="p-4 space-y-5">
-                    <div>
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="material-symbols-outlined text-[14px] text-amber-600">flag</span>
-                          <p className="text-[10px] font-bold text-[#575f67] uppercase" style={{ letterSpacing: '0.06em' }}>Next Action</p>
-                        </div>
-                        <FollowUpBadge conversation={activeConversation} compact />
-                      </div>
-                      <textarea
-                        value={followUpNoteDraft}
-                        onChange={(event) => setFollowUpDraftState({ conversationId: activeConversation.id, note: event.target.value })}
-                        placeholder="Add a short next action for this conversation."
-                        className="min-h-[76px] w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] text-slate-700 outline-none transition focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
-                      />
-                      <div className="mt-2 flex items-center justify-between gap-3">
-                        <p className="text-[10px] text-slate-400">Shows as a follow-up cue in the inbox and conversation header.</p>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {activeConversation.needs_follow_up ? (
-                            <button
-                              type="button"
-                              onClick={handleClearFollowUp}
-                              disabled={savingFollowUp}
-                              className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              Clear
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            onClick={handleSaveFollowUp}
-                            disabled={savingFollowUp}
-                            className="inline-flex h-9 items-center justify-center rounded-xl bg-amber-600 px-3 text-[11px] font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-300"
-                          >
-                            {savingFollowUp ? 'Saving...' : activeConversation.needs_follow_up ? 'Update' : 'Mark'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    <FollowUpActionPanel
+                      conversation={activeConversation}
+                      note={followUpNoteDraft}
+                      saving={savingFollowUp}
+                      onNoteChange={(note) => setFollowUpDraftState({ conversationId: activeConversation.id, note })}
+                      onSave={handleSaveFollowUp}
+                      onClear={handleClearFollowUp}
+                    />
 
                     {/* Tag */}
                     <div>

@@ -10,6 +10,10 @@ import {
 } from "@/lib/messagesSessionCache";
 import type { Conversation, Message, UpdateConversationRequest } from "@/types/chat";
 
+export type FetchConversationsParams = {
+  needs_follow_up?: boolean | null;
+};
+
 export interface UseConversationsReturn {
   conversations: Conversation[];
   activeConversation: Conversation | null;
@@ -19,7 +23,7 @@ export interface UseConversationsReturn {
   notifCounts: Record<string, number>;
   /** Current viewers (display names) of the active conversation */
   activeViewers: string[];
-  fetchConversations: () => Promise<void>;
+  fetchConversations: (params?: FetchConversationsParams) => Promise<void>;
   selectConversation: (conv: Conversation) => Promise<void>;
   updateConversation: (id: string, data: UpdateConversationRequest) => Promise<void>;
   /** Called by WS handler when a new message arrives (full message for subscribers) */
@@ -45,6 +49,7 @@ export function useConversations(): UseConversationsReturn {
   const [activeViewers, setActiveViewers] = useState<string[]>([]);
 
   const activeConversationRef = useRef<Conversation | null>(null);
+  const fetchParamsRef = useRef<FetchConversationsParams>({});
 
   const setActive = useCallback((conv: Conversation | null) => {
     activeConversationRef.current = conv;
@@ -67,10 +72,13 @@ export function useConversations(): UseConversationsReturn {
     setActive(null);
   }, [conversations, setActive]);
 
-  const fetchConversations = useCallback(async () => {
+  const fetchConversations = useCallback(async (params?: FetchConversationsParams) => {
+    if (params !== undefined) {
+      fetchParamsRef.current = params;
+    }
     setLoading(true);
     try {
-      const { data } = await conversationsApi.getConversations();
+      const { data } = await conversationsApi.getConversations(100, fetchParamsRef.current);
       setConversations(data);
     } catch (err) {
       console.error("fetchConversations:", err);
@@ -114,6 +122,7 @@ export function useConversations(): UseConversationsReturn {
       }
     } catch (err) {
       console.error("updateConversation:", err);
+      throw err;
     }
   }, [setActive]);
 

@@ -22,7 +22,6 @@ def upgrade() -> None:
     op.add_column("conversations", sa.Column("follow_up_note", sa.Text(), nullable=True))
     op.add_column("conversations", sa.Column("follow_up_at", sa.DateTime(timezone=True), nullable=True))
     op.create_index(op.f("ix_conversations_needs_follow_up"), "conversations", ["needs_follow_up"], unique=False)
-    op.alter_column("conversations", "needs_follow_up", server_default=None)
 
 
 def downgrade() -> None:

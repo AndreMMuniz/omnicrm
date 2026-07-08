@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Enum, JSON, Integer, Numeric, Date, CheckConstraint
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Text, Enum, JSON, Integer, Numeric, Date, CheckConstraint, false
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -236,7 +236,7 @@ class Conversation(Base):
     status = Column(Enum(ConversationStatus), default=ConversationStatus.OPEN)
     tag = Column(Enum(ConversationTag), nullable=True)
     tags = Column(JSON, nullable=False, default=list)
-    needs_follow_up = Column(Boolean, default=False, nullable=False, index=True)
+    needs_follow_up = Column(Boolean, default=False, server_default=false(), nullable=False, index=True)
     follow_up_note = Column(Text, nullable=True)
     follow_up_at = Column(DateTime(timezone=True), nullable=True)
 

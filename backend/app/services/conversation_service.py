@@ -77,6 +77,10 @@ class ConversationService:
                     data["tags"] = normalized_tags
                 data["tag"] = ConversationTag[normalized_tags[0].upper()] if normalized_tags else None
 
+        if data.get("needs_follow_up") is False:
+            data["follow_up_note"] = None
+            data["follow_up_at"] = None
+
         for key, value in data.items():
             setattr(conversation, key, value)
         self.db.commit()
