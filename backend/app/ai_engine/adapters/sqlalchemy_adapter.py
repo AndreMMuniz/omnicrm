@@ -105,4 +105,6 @@ class SQLAlchemyLeadAdapter:
             return result.lead_identity_id
         except Exception:
             # Identity resolution must not break lead creation.
+            self._db.rollback()
+            logger.exception("Lead identity resolution failed after lead creation for lead %s", lead_id)
             return None

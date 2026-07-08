@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.hashing import hash_identifier
@@ -38,8 +37,9 @@ class LeadIdentityResolutionService:
             raise LookupError(f"Lead not found: {lead_id}")
 
         signals = self._signals_for_lead(lead)
-        exact_identity, exact_reasons = self._find_exact_identity(signals)
-        if exact_identity:
+        exact_matches = self._find_exact_matches(signals)
+        if len(exact_matches) == 1:
+            exact_identity, exact_reasons = next(iter(exact_matches.values()))
             return self._attach(
                 lead=lead,
                 identity=exact_identity,
@@ -48,6 +48,14 @@ class LeadIdentityResolutionService:
                 match_reasons=exact_reasons,
                 review_required=False,
                 candidates=[],
+            )
+        if len(exact_matches) > 1:
+            candidates = [self._candidate_payload(identity) for identity, _ in exact_matches.values()]
+            return self._mark_ambiguous(
+                lead=lead,
+                confidence=self.STRONG_MATCH_CONFIDENCE,
+                match_reasons=["conflicting_exact_identifier_match"],
+                candidates=candidates,
             )
 
         ambiguous_candidates = self._find_ambiguous_candidates(signals)
@@ -91,19 +99,29 @@ class LeadIdentityResolutionService:
             "normalized_company": self._normalize_text(lead.company),
         }
 
-    def _find_exact_identity(self, signals: dict[str, str | None]) -> tuple[LeadIdentity | None, list[str]]:
-        filters = []
-        reasons = []
+    def _find_exact_matches(self, signals: dict[str, str | None]) -> dict[str, tuple[LeadIdentity, list[str]]]:
+        matches: dict[str, tuple[LeadIdentity, list[str]]] = {}
         if signals["email_hash"]:
-            filters.append(LeadIdentity.email_hash == signals["email_hash"])
-            reasons.append("email_hash_match")
+            for identity in (
+                self.db.query(LeadIdentity)
+                .filter(LeadIdentity.email_hash == signals["email_hash"])
+                .order_by(LeadIdentity.created_at.asc())
+                .all()
+            ):
+                key = str(identity.id)
+                _, reasons = matches.setdefault(key, (identity, []))
+                reasons.append("email_hash_match")
         if signals["phone_hash"]:
-            filters.append(LeadIdentity.phone_hash == signals["phone_hash"])
-            reasons.append("phone_hash_match")
-        if not filters:
-            return None, []
-        identity = self.db.query(LeadIdentity).filter(or_(*filters)).order_by(LeadIdentity.created_at.asc()).first()
-        return identity, reasons if identity else []
+            for identity in (
+                self.db.query(LeadIdentity)
+                .filter(LeadIdentity.phone_hash == signals["phone_hash"])
+                .order_by(LeadIdentity.created_at.asc())
+                .all()
+            ):
+                key = str(identity.id)
+                _, reasons = matches.setdefault(key, (identity, []))
+                reasons.append("phone_hash_match")
+        return matches
 
     def _find_ambiguous_candidates(self, signals: dict[str, str | None]) -> list[LeadIdentity]:
         if not signals["normalized_name"] or not signals["normalized_company"]:

@@ -44,6 +44,86 @@ def upgrade() -> None:
     op.add_column("leads", sa.Column("identity_match_reasons", sa.JSON(), nullable=False, server_default="[]"))
     op.add_column("leads", sa.Column("identity_review_required", sa.Boolean(), nullable=False, server_default="false"))
     op.add_column("leads", sa.Column("identity_candidates", sa.JSON(), nullable=False, server_default="[]"))
+
+    op.execute(
+        """
+        CREATE TEMP TABLE legacy_lead_identity_backfill (
+            lead_id uuid PRIMARY KEY,
+            lead_identity_id uuid NOT NULL
+        ) ON COMMIT DROP
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO legacy_lead_identity_backfill (lead_id, lead_identity_id)
+        SELECT id, gen_random_uuid()
+        FROM leads
+        WHERE lead_identity_id IS NULL
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO lead_identities (
+            id,
+            display_name,
+            company,
+            email_hash,
+            phone_hash,
+            normalized_name,
+            normalized_company,
+            resolution_status,
+            confidence,
+            match_reasons
+        )
+        SELECT
+            b.lead_identity_id,
+            l.name,
+            l.company,
+            l.email_hash,
+            l.phone_hash,
+            NULLIF(
+                regexp_replace(
+                    regexp_replace(lower(btrim(l.name)), '\\s+', ' ', 'g'),
+                    '[^[:alnum:]_[:space:]]',
+                    '',
+                    'g'
+                ),
+                ''
+            ),
+            NULLIF(
+                regexp_replace(
+                    regexp_replace(lower(btrim(l.company)), '\\s+', ' ', 'g'),
+                    '[^[:alnum:]_[:space:]]',
+                    '',
+                    'g'
+                ),
+                ''
+            ),
+            'resolved',
+            CASE WHEN l.email_hash IS NOT NULL OR l.phone_hash IS NOT NULL THEN 1.0 ELSE 0.5 END,
+            '["legacy_backfill"]'::json
+        FROM leads l
+        JOIN legacy_lead_identity_backfill b ON b.lead_id = l.id
+        """
+    )
+    op.execute(
+        """
+        UPDATE leads
+        SET
+            lead_identity_id = b.lead_identity_id,
+            identity_resolution_status = 'resolved',
+            identity_confidence = CASE
+                WHEN leads.email_hash IS NOT NULL OR leads.phone_hash IS NOT NULL THEN 1.0
+                ELSE 0.5
+            END,
+            identity_match_reasons = '["legacy_backfill"]'::json,
+            identity_review_required = false,
+            identity_candidates = '[]'::json
+        FROM legacy_lead_identity_backfill b
+        WHERE leads.id = b.lead_id
+        """
+    )
+
     op.create_foreign_key(
         "fk_leads_lead_identity_id",
         "leads",

@@ -1,9 +1,14 @@
+from unittest.mock import patch
+from uuid import UUID
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.ai_engine.adapters.sqlalchemy_adapter import SQLAlchemyLeadAdapter
 from app.core.database import Base
-from app.models.models import Client, Contact, Conversation, Lead, LeadIdentity, Project, ProjectStage, User, UserType
+from app.models.models import ChannelType, Client, Contact, Conversation, Lead, LeadIdentity, Project, ProjectStage, User, UserType
+from app.services.lead_enrichment_service import LeadEnrichmentService
 from app.services.lead_identity_resolution_service import LeadIdentityResolutionService
 
 
@@ -142,6 +147,98 @@ def test_name_company_only_match_is_flagged_for_review():
         assert lead.identity_review_required is True
         assert lead.identity_candidates[0]["lead_identity_id"] == str(identity.id)
         assert "normalized_name_company_match" in lead.identity_match_reasons
+    finally:
+        db.close()
+        _reset_schema()
+
+
+def test_conflicting_exact_email_and_phone_matches_are_flagged_for_review():
+    db = _session()
+    try:
+        email_identity = LeadIdentity(
+            display_name="Marina Email",
+            company="Acme",
+            email_hash="email-hash",
+            normalized_name="marina email",
+            normalized_company="acme",
+            resolution_status="resolved",
+            confidence=0.95,
+            match_reasons=["email_hash_match"],
+        )
+        phone_identity = LeadIdentity(
+            display_name="Marina Phone",
+            company="Acme",
+            phone_hash="phone-hash",
+            normalized_name="marina phone",
+            normalized_company="acme",
+            resolution_status="resolved",
+            confidence=0.95,
+            match_reasons=["phone_hash_match"],
+        )
+        lead = Lead(
+            name="Marina Costa",
+            company="Acme",
+            email_hash="email-hash",
+            phone_hash="phone-hash",
+            source_channel="whatsapp",
+        )
+        db.add_all([email_identity, phone_identity, lead])
+        db.commit()
+
+        result = LeadIdentityResolutionService(db).resolve_for_lead(lead.id)
+
+        assert result.status == "ambiguous"
+        assert result.lead_identity_id is None
+        assert result.review_required is True
+        assert "conflicting_exact_identifier_match" in result.match_reasons
+        assert {candidate["lead_identity_id"] for candidate in result.candidates} == {
+            str(email_identity.id),
+            str(phone_identity.id),
+        }
+
+        db.refresh(lead)
+        assert lead.lead_identity_id is None
+        assert lead.identity_resolution_status == "ambiguous"
+        assert lead.identity_review_required is True
+    finally:
+        db.close()
+        _reset_schema()
+
+
+def test_adapter_logs_and_rolls_back_when_identity_resolution_fails(caplog):
+    db = _session()
+    try:
+        contact = Contact(name="Marina Costa", channel_identifier="marina@example.com")
+        conversation = Conversation(contact=contact, channel=ChannelType.WHATSAPP)
+        db.add_all([contact, conversation])
+        db.commit()
+
+        adapter = SQLAlchemyLeadAdapter(db)
+
+        with (
+            patch.object(
+                LeadIdentityResolutionService,
+                "resolve_for_lead",
+                side_effect=RuntimeError("identity store unavailable"),
+            ),
+            patch.object(LeadEnrichmentService, "enrich_lead", return_value=None),
+            patch.object(db, "rollback", wraps=db.rollback) as rollback,
+            caplog.at_level("ERROR", logger="app.ai_engine.adapters.sqlalchemy_adapter"),
+        ):
+            lead_id = adapter.create_lead(
+                conversation_id=conversation.id,
+                channel="whatsapp",
+                entities={"name": "Marina Costa", "email": "marina@example.com"},
+                confidence={"name": 0.9, "email": 0.9},
+            )
+
+        assert lead_id
+        assert rollback.called
+        assert "Lead identity resolution failed after lead creation" in caplog.text
+
+        stored = db.query(Lead).filter(Lead.id == UUID(lead_id)).first()
+        assert stored is not None
+        assert stored.identity_resolution_status == "unresolved"
     finally:
         db.close()
         _reset_schema()
