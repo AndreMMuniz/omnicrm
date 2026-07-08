@@ -115,6 +115,7 @@ def test_enrich_lead_persists_facts_and_ai_inferences():
         assert enriched.enriched_at is not None
         assert enriched.source_facts["lead"]["company"] == "Acme"
         assert enriched.source_facts["contact"]["name"] == "Marina Costa"
+        assert "channel_identifier" not in enriched.source_facts["contact"]
         assert enriched.ai_inferences["role"]["value"] == "Operations Manager"
         assert enriched.ai_inferences["pain_points"][0]["value"] == "fragmented support queue"
     finally:
@@ -134,8 +135,40 @@ def test_enrich_lead_failure_marks_failed_without_deleting_lead():
 
         assert enriched.id == lead.id
         assert enriched.enrichment_status == "failed"
-        assert "LLM provider unavailable" in enriched.enrichment_error
+        assert enriched.enrichment_error == "Lead enrichment failed. Check server logs for diagnostic details."
+        assert "sensitive trace" not in enriched.enrichment_error
         assert db.query(Lead).filter(Lead.id == lead.id).first() is not None
+    finally:
+        db.close()
+        _reset_schema()
+
+
+def test_enrich_lead_caps_and_deduplicates_provider_pain_points():
+    db = _session()
+    try:
+        lead = _seed_lead(db)
+        result = {
+            "pain_points": [
+                {"value": "Queue visibility", "confidence": 0.7},
+                {"value": "queue visibility", "confidence": 0.8},
+                {"value": "Follow-up tracking", "confidence": 0.7},
+                {"value": "Proposal clarity", "confidence": 0.7},
+                {"value": "Response handoff", "confidence": 0.7},
+                {"value": "Channel fragmentation", "confidence": 0.7},
+                {"value": "Extra ignored", "confidence": 0.7},
+            ],
+        }
+
+        enriched = LeadEnrichmentService(db, enrichment_provider=lambda context: result).enrich_lead(lead.id)
+
+        assert enriched.pain_points == [
+            "Queue visibility",
+            "Follow-up tracking",
+            "Proposal clarity",
+            "Response handoff",
+            "Channel fragmentation",
+        ]
+        assert len(enriched.ai_inferences["pain_points"]) == 5
     finally:
         db.close()
         _reset_schema()

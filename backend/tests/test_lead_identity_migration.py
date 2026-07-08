@@ -1,11 +1,21 @@
 from pathlib import Path
 
 
-def test_lead_identity_migration_backfills_existing_leads_as_identity_anchors():
+def test_lead_identity_migration_groups_legacy_leads_by_identifier_anchors():
     repo_root = Path(__file__).resolve().parents[2]
     migration = (repo_root / "backend/alembic/versions/c2d3e4f5g6h7_add_lead_identity_resolution.py").read_text()
 
-    assert "INSERT INTO lead_identities" in migration
-    assert "UPDATE leads" in migration
-    assert "lead_identity_id" in migration
-    assert "identity_resolution_status = 'resolved'" in migration
+    assert "SELECT e.id" in migration
+    assert "e.email_hash = l.email_hash" in migration
+    assert "SELECT p.id" in migration
+    assert "p.phone_hash = l.phone_hash" in migration
+    assert "SELECT DISTINCT ON (b.lead_identity_id)" in migration
+
+
+def test_lead_identity_migration_marks_identifierless_legacy_leads_for_review():
+    repo_root = Path(__file__).resolve().parents[2]
+    migration = (repo_root / "backend/alembic/versions/c2d3e4f5g6h7_add_lead_identity_resolution.py").read_text()
+
+    assert "ELSE 'needs_review'" in migration
+    assert '"missing_identifier"' in migration
+    assert "ELSE true" in migration

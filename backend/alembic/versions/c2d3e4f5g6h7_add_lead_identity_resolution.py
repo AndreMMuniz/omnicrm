@@ -56,9 +56,29 @@ def upgrade() -> None:
     op.execute(
         """
         INSERT INTO legacy_lead_identity_backfill (lead_id, lead_identity_id)
-        SELECT id, gen_random_uuid()
-        FROM leads
-        WHERE lead_identity_id IS NULL
+        SELECT
+            l.id,
+            COALESCE(
+                (
+                    SELECT e.id
+                    FROM leads e
+                    WHERE l.email_hash IS NOT NULL
+                      AND e.email_hash = l.email_hash
+                    ORDER BY e.created_at ASC, e.id ASC
+                    LIMIT 1
+                ),
+                (
+                    SELECT p.id
+                    FROM leads p
+                    WHERE l.phone_hash IS NOT NULL
+                      AND p.phone_hash = l.phone_hash
+                    ORDER BY p.created_at ASC, p.id ASC
+                    LIMIT 1
+                ),
+                l.id
+            )
+        FROM leads l
+        WHERE l.lead_identity_id IS NULL
         """
     )
     op.execute(
@@ -75,7 +95,7 @@ def upgrade() -> None:
             confidence,
             match_reasons
         )
-        SELECT
+        SELECT DISTINCT ON (b.lead_identity_id)
             b.lead_identity_id,
             l.name,
             l.company,
@@ -99,11 +119,15 @@ def upgrade() -> None:
                 ),
                 ''
             ),
-            'resolved',
+            CASE WHEN l.email_hash IS NOT NULL OR l.phone_hash IS NOT NULL THEN 'resolved' ELSE 'needs_review' END,
             CASE WHEN l.email_hash IS NOT NULL OR l.phone_hash IS NOT NULL THEN 1.0 ELSE 0.5 END,
-            '["legacy_backfill"]'::json
-        FROM leads l
-        JOIN legacy_lead_identity_backfill b ON b.lead_id = l.id
+            CASE
+                WHEN l.email_hash IS NOT NULL OR l.phone_hash IS NOT NULL THEN '["legacy_backfill"]'::json
+                ELSE '["legacy_backfill", "missing_identifier"]'::json
+            END
+        FROM legacy_lead_identity_backfill b
+        JOIN leads l ON l.id = b.lead_identity_id
+        ORDER BY b.lead_identity_id
         """
     )
     op.execute(
@@ -111,13 +135,22 @@ def upgrade() -> None:
         UPDATE leads
         SET
             lead_identity_id = b.lead_identity_id,
-            identity_resolution_status = 'resolved',
+            identity_resolution_status = CASE
+                WHEN leads.email_hash IS NOT NULL OR leads.phone_hash IS NOT NULL THEN 'resolved'
+                ELSE 'needs_review'
+            END,
             identity_confidence = CASE
                 WHEN leads.email_hash IS NOT NULL OR leads.phone_hash IS NOT NULL THEN 1.0
                 ELSE 0.5
             END,
-            identity_match_reasons = '["legacy_backfill"]'::json,
-            identity_review_required = false,
+            identity_match_reasons = CASE
+                WHEN leads.email_hash IS NOT NULL OR leads.phone_hash IS NOT NULL THEN '["legacy_backfill"]'::json
+                ELSE '["legacy_backfill", "missing_identifier"]'::json
+            END,
+            identity_review_required = CASE
+                WHEN leads.email_hash IS NOT NULL OR leads.phone_hash IS NOT NULL THEN false
+                ELSE true
+            END,
             identity_candidates = '[]'::json
         FROM legacy_lead_identity_backfill b
         WHERE leads.id = b.lead_id

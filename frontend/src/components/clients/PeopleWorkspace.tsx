@@ -27,6 +27,60 @@ function getIdentityHint(person: { email?: string | null; phone?: string | null;
   return person.channel_identifier?.trim() || person.email?.trim() || person.phone?.trim() || "No identity clue";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function formatFieldName(value: string) {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatDetailValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const displayValues = value.filter((item) => ["string", "number", "boolean"].includes(typeof item)).slice(0, 3);
+    return displayValues.length > 0 ? displayValues.join(", ") : null;
+  }
+  return null;
+}
+
+function getSourceFactItems(facts: Record<string, unknown>) {
+  const items: { label: string; value: string }[] = [];
+  Object.entries(facts).forEach(([group, groupValue]) => {
+    if (!isRecord(groupValue)) return;
+    Object.entries(groupValue).forEach(([key, value]) => {
+      if (key === "id" || key === "extraction_confidence") return;
+      const displayValue = formatDetailValue(value);
+      if (!displayValue) return;
+      items.push({ label: `${formatFieldName(group)}: ${formatFieldName(key)}`, value: displayValue });
+    });
+  });
+  return items.slice(0, 8);
+}
+
+function getInferenceItems(inferences: Record<string, unknown>) {
+  const items: { label: string; value: string; detail?: string | null }[] = [];
+  Object.entries(inferences).forEach(([key, value]) => {
+    const entries = Array.isArray(value) ? value : [value];
+    entries.forEach((entry, index) => {
+      if (!isRecord(entry)) return;
+      const displayValue = formatDetailValue(entry.value);
+      if (!displayValue) return;
+      const confidence = typeof entry.confidence === "number" ? `${Math.round(entry.confidence * 100)}%` : null;
+      const rationale = formatDetailValue(entry.rationale);
+      items.push({
+        label: entries.length > 1 ? `${formatFieldName(key)} ${index + 1}` : formatFieldName(key),
+        value: confidence ? `${displayValue} (${confidence})` : displayValue,
+        detail: rationale,
+      });
+    });
+  });
+  return items.slice(0, 8);
+}
+
 export function PeopleWorkspace() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -44,6 +98,8 @@ export function PeopleWorkspace() {
   const visiblePeopleIds = people.map((person) => person.id).join("|");
   const linkedCount = people.filter((person) => person.client_id).length;
   const unlinkedCount = people.filter((person) => !person.client_id).length;
+  const leadFactItems = selectedPerson?.lead_enrichment ? getSourceFactItems(selectedPerson.lead_enrichment.source_facts) : [];
+  const leadInferenceItems = selectedPerson?.lead_enrichment ? getInferenceItems(selectedPerson.lead_enrichment.ai_inferences) : [];
 
   function updateUrl(next: { personId?: string | null; search?: string; filter?: PeopleFilter }) {
     const params = new URLSearchParams();
@@ -312,13 +368,48 @@ export function PeopleWorkspace() {
                     ) : null}
                     {selectedPerson.lead_enrichment.pain_points.length > 0 ? (
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {selectedPerson.lead_enrichment.pain_points.map((painPoint) => (
-                          <span key={painPoint} className="rounded-full border border-indigo-100 bg-white px-3 py-1.5 text-xs text-slate-600">
+                        {selectedPerson.lead_enrichment.pain_points.map((painPoint, index) => (
+                          <span key={`${painPoint}-${index}`} className="rounded-full border border-indigo-100 bg-white px-3 py-1.5 text-xs text-slate-600">
                             {painPoint}
                           </span>
                         ))}
                       </div>
                     ) : null}
+                    <div className="mt-4 grid gap-3 text-xs md:grid-cols-2">
+                      <div className="rounded-2xl border border-white/80 bg-white/70 p-3">
+                        <p className="font-semibold uppercase tracking-[0.14em] text-slate-400">Source facts</p>
+                        <div className="mt-3 space-y-2">
+                          {leadFactItems.length > 0 ? (
+                            leadFactItems.map((item) => (
+                              <div key={`${item.label}-${item.value}`} className="flex justify-between gap-3 text-slate-600">
+                                <span className="text-slate-400">{item.label}</span>
+                                <span className="text-right font-medium text-slate-700">{item.value}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-slate-500">No source facts recorded.</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/80 bg-white/70 p-3">
+                        <p className="font-semibold uppercase tracking-[0.14em] text-slate-400">AI inferences</p>
+                        <div className="mt-3 space-y-2">
+                          {leadInferenceItems.length > 0 ? (
+                            leadInferenceItems.map((item) => (
+                              <div key={`${item.label}-${item.value}`} className="text-slate-600">
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-slate-400">{item.label}</span>
+                                  <span className="text-right font-medium text-slate-700">{item.value}</span>
+                                </div>
+                                {item.detail ? <p className="mt-1 text-slate-500">{item.detail}</p> : null}
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-slate-500">No AI inferences recorded.</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 ) : null}
 

@@ -94,7 +94,6 @@ class LeadEnrichmentService:
                 "name": contact.name if contact else None,
                 "email_present": bool(contact.email) if contact else False,
                 "phone_present": bool(contact.phone) if contact else False,
-                "channel_identifier": contact.channel_identifier if contact else None,
             },
             "linked_company": {
                 "id": str(client.id) if client else None,
@@ -196,25 +195,42 @@ class LeadEnrichmentService:
     def _normalize_result(self, result: dict[str, Any]) -> dict[str, Any]:
         role_result = result.get("role")
         role = self._value_from_inference(role_result)
-        pain_point_results = result.get("pain_points") or []
-        pain_points = [
-            value
-            for value in (self._value_from_inference(item) for item in pain_point_results)
-            if value
-        ]
+        pain_points, pain_point_inferences = self._normalize_pain_points(result.get("pain_points"))
         return {
             "role": role,
             "pain_points": pain_points,
             "qualification_notes": self._clean_text(result.get("qualification_notes")),
             "ai_inferences": {
                 "role": self._normalize_inference(role_result),
-                "pain_points": [
-                    self._normalize_inference(item)
-                    for item in pain_point_results
-                    if self._value_from_inference(item)
-                ],
+                "pain_points": pain_point_inferences,
             },
         }
+
+    def _normalize_pain_points(self, raw_items: Any) -> tuple[list[str], list[dict[str, Any]]]:
+        if raw_items is None:
+            items: list[Any] = []
+        elif isinstance(raw_items, list):
+            items = raw_items
+        else:
+            items = [raw_items]
+
+        values: list[str] = []
+        inferences: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in items:
+            inference = self._normalize_inference(item)
+            value = inference.get("value") if inference else None
+            if not value:
+                continue
+            key = value.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            values.append(value)
+            inferences.append(inference)
+            if len(values) >= 5:
+                break
+        return values, inferences
 
     def _value_from_inference(self, value: Any) -> str | None:
         if isinstance(value, dict):
@@ -250,5 +266,4 @@ class LeadEnrichmentService:
         return text[:1000]
 
     def _sanitize_error(self, exc: Exception) -> str:
-        message = str(exc).strip() or exc.__class__.__name__
-        return message[:500]
+        return "Lead enrichment failed. Check server logs for diagnostic details."

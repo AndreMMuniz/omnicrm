@@ -228,6 +228,7 @@ async def update_lead_status(
 async def enrich_lead(
     request: Request,
     lead_id: UUID,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Retry lead enrichment without changing lead creation semantics."""

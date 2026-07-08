@@ -205,6 +205,41 @@ def test_conflicting_exact_email_and_phone_matches_are_flagged_for_review():
         _reset_schema()
 
 
+def test_same_identity_matching_email_and_phone_remains_resolved():
+    db = _session()
+    try:
+        identity = LeadIdentity(
+            display_name="Marina Costa",
+            company="Acme",
+            email_hash="email-hash",
+            phone_hash="phone-hash",
+            normalized_name="marina costa",
+            normalized_company="acme",
+            resolution_status="resolved",
+            confidence=0.95,
+            match_reasons=["seed"],
+        )
+        lead = Lead(
+            name="Marina Costa",
+            company="Acme",
+            email_hash="email-hash",
+            phone_hash="phone-hash",
+            source_channel="whatsapp",
+        )
+        db.add_all([identity, lead])
+        db.commit()
+
+        result = LeadIdentityResolutionService(db).resolve_for_lead(lead.id)
+
+        assert result.status == "resolved"
+        assert result.lead_identity_id == str(identity.id)
+        assert result.review_required is False
+        assert result.match_reasons == ["email_hash_match", "phone_hash_match"]
+    finally:
+        db.close()
+        _reset_schema()
+
+
 def test_adapter_logs_and_rolls_back_when_identity_resolution_fails(caplog):
     db = _session()
     try:
@@ -238,7 +273,10 @@ def test_adapter_logs_and_rolls_back_when_identity_resolution_fails(caplog):
 
         stored = db.query(Lead).filter(Lead.id == UUID(lead_id)).first()
         assert stored is not None
-        assert stored.identity_resolution_status == "unresolved"
+        assert stored.identity_resolution_status == "needs_review"
+        assert stored.identity_review_required is True
+        assert stored.identity_confidence == 0.0
+        assert stored.identity_match_reasons == ["identity_resolution_failed"]
     finally:
         db.close()
         _reset_schema()

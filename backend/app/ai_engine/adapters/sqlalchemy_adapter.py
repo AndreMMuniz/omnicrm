@@ -5,6 +5,7 @@ This is the only file inside ai_engine/ that imports SQLAlchemy or ORM models.
 
 import logging
 from typing import Optional
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -91,13 +92,15 @@ class SQLAlchemyLeadAdapter:
         self._db.add(lead)
         self._db.flush()   # populate lead.id without committing — caller owns the transaction
         self._db.commit()
-        self.resolve_lead_identity(str(lead.id))
+        lead_id = str(lead.id)
+        self.resolve_lead_identity(lead_id)
         try:
             LeadEnrichmentService(self._db).enrich_lead(lead.id)
         except Exception:
             # Lead creation must remain successful even when enrichment fails.
-            logger.exception("Lead enrichment failed after lead creation for lead %s", lead.id)
-        return str(lead.id)
+            self._db.rollback()
+            logger.exception("Lead enrichment failed after lead creation for lead %s", lead_id)
+        return lead_id
 
     def resolve_lead_identity(self, lead_id: str) -> Optional[str]:
         try:
@@ -105,6 +108,26 @@ class SQLAlchemyLeadAdapter:
             return result.lead_identity_id
         except Exception:
             # Identity resolution must not break lead creation.
-            self._db.rollback()
             logger.exception("Lead identity resolution failed after lead creation for lead %s", lead_id)
+            try:
+                self._db.rollback()
+            except Exception:
+                logger.exception("Session rollback failed after lead identity resolution error for lead %s", lead_id)
+                return None
+            try:
+                lead_lookup_id = UUID(lead_id)
+                lead = self._db.query(Lead).filter(Lead.id == lead_lookup_id).first()
+                if lead:
+                    lead.identity_resolution_status = "needs_review"
+                    lead.identity_confidence = 0.0
+                    lead.identity_match_reasons = ["identity_resolution_failed"]
+                    lead.identity_review_required = True
+                    lead.identity_candidates = []
+                    self._db.commit()
+            except Exception:
+                try:
+                    self._db.rollback()
+                except Exception:
+                    logger.exception("Session rollback failed after lead identity review marker error for lead %s", lead_id)
+                logger.exception("Failed to mark lead identity resolution for review after error for lead %s", lead_id)
             return None

@@ -5,8 +5,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.api import api_router
+from app.core.auth import get_current_user
 from app.core.database import Base, get_db
-from app.models.models import ChannelType, Client, Contact, Conversation, Lead, LeadIdentity, Message, Project, ProjectStage, User, UserType
+from app.models.models import ChannelType, Client, Contact, Conversation, DefaultRole, Lead, LeadIdentity, Message, Project, ProjectStage, User, UserType
 
 
 engine = create_engine(
@@ -44,7 +45,7 @@ def _reset_schema():
         connection.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 
-def _make_client(db):
+def _make_client(db, current_user=None):
     app = FastAPI()
     app.include_router(api_router, prefix="/api/v1")
 
@@ -55,7 +56,33 @@ def _make_client(db):
             pass
 
     app.dependency_overrides[get_db] = override_get_db
+    if current_user:
+        async def override_current_user():
+            return current_user
+
+        app.dependency_overrides[get_current_user] = override_current_user
     return TestClient(app, raise_server_exceptions=True)
+
+
+def _seed_user(db):
+    user_type = UserType(
+        name="Lead Enrichment Operator",
+        base_role=DefaultRole.USER,
+        is_system=False,
+    )
+    db.add(user_type)
+    db.flush()
+    user = User(
+        auth_id="auth-lead-enrichment-operator",
+        email="lead-enrichment-operator@example.com",
+        full_name="Lead Enrichment Operator",
+        user_type_id=user_type.id,
+        is_active=True,
+        is_approved=True,
+    )
+    db.add(user)
+    db.flush()
+    return user
 
 
 def _seed_lead(db):
@@ -126,6 +153,39 @@ def test_list_leads_includes_enrichment_summary():
         assert row["role"] == "Operations Manager"
         assert row["pain_points"] == ["fragmented support queue"]
         assert row["enrichment_status"] == "completed"
+    finally:
+        db.close()
+        _reset_schema()
+
+
+def test_retry_enrichment_requires_authentication():
+    _reset_schema()
+    db = TestingSessionLocal()
+    try:
+        lead = _seed_lead(db)
+        client = _make_client(db)
+
+        response = client.post(f"/api/v1/leads/{lead.id}/enrich")
+
+        assert response.status_code == 401
+    finally:
+        db.close()
+        _reset_schema()
+
+
+def test_retry_enrichment_allows_authenticated_user():
+    _reset_schema()
+    db = TestingSessionLocal()
+    try:
+        lead = _seed_lead(db)
+        current_user = _seed_user(db)
+        client = _make_client(db, current_user)
+
+        response = client.post(f"/api/v1/leads/{lead.id}/enrich")
+
+        assert response.status_code == 200
+        payload = response.json()["data"]
+        assert payload["enrichment_status"] == "completed"
     finally:
         db.close()
         _reset_schema()
