@@ -140,11 +140,18 @@ class LeadScoringService:
             missing = ", ".join(sorted(required_components - set(components)))
             raise ValueError(f"Scoring config components missing: {missing}")
 
-        parsed_thresholds = {key: int(thresholds[key]) for key in ("hot", "warm", "cold")}
-        if not 0 <= float(low_confidence_threshold) <= 1:
+        parsed_thresholds = {key: self._coerce_int(thresholds[key], f"threshold {key}") for key in ("hot", "warm", "cold")}
+        parsed_low_confidence_threshold = self._coerce_float(
+            low_confidence_threshold,
+            "low_confidence_threshold",
+        )
+        if not 0 <= parsed_low_confidence_threshold <= 1:
             raise ValueError("low_confidence_threshold must be between 0 and 1")
 
-        parsed_components = {key: int(components[key]) for key in required_components}
+        parsed_components = {
+            key: self._coerce_int(components[key], f"component {key}")
+            for key in required_components
+        }
         for key, value in parsed_components.items():
             if value < 0 and key != "duplicate_risk":
                 raise ValueError(f"Component {key} cannot be negative")
@@ -152,9 +159,25 @@ class LeadScoringService:
         return LeadScoringRules(
             version=version,
             thresholds=parsed_thresholds,
-            low_confidence_threshold=float(low_confidence_threshold),
+            low_confidence_threshold=parsed_low_confidence_threshold,
             components=parsed_components,
         )
+
+    def _coerce_int(self, value: Any, field_name: str) -> int:
+        if isinstance(value, bool) or value is None:
+            raise ValueError(f"{field_name} must be a number")
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{field_name} must be a number")
+
+    def _coerce_float(self, value: Any, field_name: str) -> float:
+        if isinstance(value, bool) or value is None:
+            raise ValueError(f"{field_name} must be a number")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{field_name} must be a number")
 
     def _identity_component(self, lead: Lead, max_points: int) -> Dict[str, Any]:
         present = [bool(lead.name), bool(lead.email), bool(lead.phone)]
@@ -217,8 +240,18 @@ class LeadScoringService:
         }
 
     def _confidence(self, lead: Lead, breakdown: List[Dict[str, Any]]) -> float:
-        available_components = sum(1 for item in breakdown if item["source"] not in {"missing_enrichment"})
-        completeness = available_components / len(breakdown)
+        signal_components = {
+            "identity_completeness",
+            "company_fit",
+            "pain_point_fit",
+            "engagement_signal",
+        }
+        available_components = sum(
+            1
+            for item in breakdown
+            if item["component"] in signal_components and item["points"] > 0
+        )
+        completeness = available_components / len(signal_components)
         if lead.extraction_error:
             completeness -= 0.25
         if lead.duplicate_risk:

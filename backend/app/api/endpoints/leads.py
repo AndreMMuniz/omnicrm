@@ -11,9 +11,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.auth import get_current_user, require_permission
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.models.models import Conversation, Lead, LeadStatus
+from app.models.models import Conversation, Lead, LeadStatus, User
 from app.schemas.common import create_paginated_response, create_response
 from app.services.lead_enrichment_service import LeadEnrichmentService
 from app.services.lead_scoring_service import LeadScoringService
@@ -124,6 +125,7 @@ async def list_leads(
 @limiter.limit("30/minute")
 async def get_scoring_config(
     request: Request,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Return the active lead scoring config."""
@@ -135,6 +137,7 @@ async def get_scoring_config(
 async def update_scoring_config(
     request: Request,
     body: Dict[str, Any],
+    current_user: User = Depends(require_permission("can_change_settings")),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Update scoring thresholds and component weights."""
@@ -177,6 +180,7 @@ async def get_lead(
 async def score_lead(
     request: Request,
     lead_id: UUID,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Calculate or recalculate a lead score using the active config."""

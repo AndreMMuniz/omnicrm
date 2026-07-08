@@ -95,6 +95,18 @@ def test_scoring_service_marks_missing_data_as_low_confidence(db):
     assert "missing" in result.score_rationale.lower()
 
 
+def test_scoring_service_marks_blank_lead_as_low_confidence(db):
+    lead = Lead(source_channel="email", extraction_confidence={}, duplicate_risk=False)
+    db.add(lead)
+    db.commit()
+
+    result = LeadScoringService(db).score_lead(lead.id)
+
+    assert result.low_confidence is True
+    assert result.qualification_label == "low_confidence"
+    assert result.score_confidence < DEFAULT_SCORING_CONFIG.low_confidence_threshold
+
+
 def test_scoring_service_uses_configured_thresholds_without_code_changes(db):
     lead = Lead(
         name="Qualified Lead",
@@ -136,6 +148,26 @@ def test_scoring_service_rejects_invalid_config(db):
         assert "thresholds" in str(exc)
     else:
         raise AssertionError("Expected invalid config to raise ValueError")
+
+    try:
+        service.save_config(
+            {
+                "version": "bad-low-confidence",
+                "thresholds": {"hot": 80, "warm": 50, "cold": 0},
+                "low_confidence_threshold": None,
+                "components": {
+                    "identity_completeness": 20,
+                    "company_fit": 20,
+                    "pain_point_fit": 30,
+                    "engagement_signal": 20,
+                    "duplicate_risk": -10,
+                },
+            }
+        )
+    except ValueError as exc:
+        assert "low_confidence_threshold" in str(exc)
+    else:
+        raise AssertionError("Expected invalid low-confidence threshold to raise ValueError")
 
     try:
         service.score_lead(uuid4())

@@ -6,9 +6,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.api import api_router
+from app.core.auth import get_current_user
 from app.core.database import Base
 from app.core.database import get_db
-from app.models.models import Client, Contact, Conversation, Lead, LeadIdentity, LeadScoringConfig, Message, Project, ProjectStage, User, UserType
+from app.models.models import Client, Contact, Conversation, DefaultRole, Lead, LeadIdentity, LeadScoringConfig, Message, Project, ProjectStage, User, UserType
 
 
 engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -50,7 +51,29 @@ def db():
             Base.metadata.drop_all(bind=connection, tables=list(reversed(tables)))
 
 
-def _make_client(db) -> TestClient:
+def _seed_user(db, *, can_change_settings: bool = True) -> User:
+    user_type = UserType(
+        name="Lead Scoring Admin" if can_change_settings else "Lead Scoring User",
+        base_role=DefaultRole.ADMIN if can_change_settings else DefaultRole.USER,
+        is_system=False,
+        can_change_settings=can_change_settings,
+    )
+    db.add(user_type)
+    db.flush()
+    user = User(
+        auth_id=f"auth-lead-scoring-{can_change_settings}",
+        email="lead-scoring-admin@example.com" if can_change_settings else "lead-scoring-user@example.com",
+        full_name="Lead Scoring Admin" if can_change_settings else "Lead Scoring User",
+        user_type_id=user_type.id,
+        is_active=True,
+        is_approved=True,
+    )
+    db.add(user)
+    db.flush()
+    return user
+
+
+def _make_client(db, current_user: User | None = None) -> TestClient:
     app = FastAPI()
     app.include_router(api_router, prefix="/api/v1")
 
@@ -61,6 +84,11 @@ def _make_client(db) -> TestClient:
             pass
 
     app.dependency_overrides[get_db] = override_get_db
+    if current_user:
+        async def override_current_user():
+            return current_user
+
+        app.dependency_overrides[get_current_user] = override_current_user
     return TestClient(app, raise_server_exceptions=True)
 
 
@@ -128,7 +156,8 @@ def test_score_endpoint_calculates_and_persists_result(db):
     db.add(lead)
     db.commit()
 
-    client = _make_client(db)
+    current_user = _seed_user(db)
+    client = _make_client(db, current_user)
     response = client.post(f"/api/v1/leads/{lead.id}/score")
 
     assert response.status_code == 200
@@ -142,13 +171,26 @@ def test_score_endpoint_calculates_and_persists_result(db):
 
 
 def test_scoring_config_endpoint_validates_and_changes_thresholds(db):
-    client = _make_client(db)
+    current_user = _seed_user(db)
+    client = _make_client(db, current_user)
 
     bad_response = client.patch(
         "/api/v1/leads/scoring/config",
-        json={"version": "bad", "thresholds": {"hot": 90}},
+        json={
+            "version": "bad",
+            "thresholds": {"hot": 90, "warm": 50, "cold": 0},
+            "low_confidence_threshold": None,
+            "components": {
+                "identity_completeness": 20,
+                "company_fit": 20,
+                "pain_point_fit": 30,
+                "engagement_signal": 20,
+                "duplicate_risk": -10,
+            },
+        },
     )
     assert bad_response.status_code == 400
+    assert "low_confidence_threshold" in bad_response.json()["detail"]
 
     good_response = client.patch(
         "/api/v1/leads/scoring/config",
@@ -171,3 +213,27 @@ def test_scoring_config_endpoint_validates_and_changes_thresholds(db):
     get_response = client.get("/api/v1/leads/scoring/config")
     assert get_response.status_code == 200
     assert get_response.json()["data"]["version"] == "strict-api-test"
+
+
+def test_scoring_config_update_requires_settings_permission(db):
+    current_user = _seed_user(db, can_change_settings=False)
+    client = _make_client(db, current_user)
+
+    response = client.patch(
+        "/api/v1/leads/scoring/config",
+        json={
+            "version": "strict-api-test",
+            "thresholds": {"hot": 101, "warm": 101, "cold": 0},
+            "low_confidence_threshold": 0.1,
+            "components": {
+                "identity_completeness": 20,
+                "company_fit": 20,
+                "pain_point_fit": 30,
+                "engagement_signal": 20,
+                "duplicate_risk": -10,
+            },
+        },
+    )
+
+    assert response.status_code == 403
+    assert "can_change_settings" in response.json()["detail"]
