@@ -132,7 +132,7 @@ export default function SideNavBar() {
   return (
     <nav className="hidden h-full w-[272px] shrink-0 flex-col border-r border-[#E9ECEF] bg-white md:flex">
       <div className="border-b border-[#E9ECEF] px-4 py-4">
-        <Link href="/projects" className="flex items-center gap-3 rounded-2xl bg-indigo-600 px-3 py-3 text-white shadow-sm">
+        <Link href="/projects" className="flex items-center gap-3 px-3 py-3">
           <div className="flex h-12 w-[150px] shrink-0 items-center overflow-hidden rounded-xl bg-white shadow-sm">
             <Image
               src="/brand/omnicrm-logo.png"
@@ -144,7 +144,7 @@ export default function SideNavBar() {
             />
           </div>
           <div className="min-w-0">
-            <p className="mt-1 text-xs text-indigo-100">Workspace navigation</p>
+            <p className="mt-1 text-xs text-slate-500">Workspace navigation</p>
           </div>
         </Link>
       </div>
